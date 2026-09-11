@@ -23,10 +23,10 @@ def _directory_hint(cwd: Path, raw: object) -> Path | None:
 def resolve_project_root(cwd: Path, project_dir_hint: object = None) -> Path:
     """Resolve the stable root used for Context Guard state.
 
-    Claude Code exposes CLAUDE_PROJECT_DIR to hook commands. The CLI copies
-    that value into an internal payload field before dispatching, keeping the
-    hook handlers deterministic and easy to test. Direct/manual invocation
-    falls back to the current Git worktree root, then cwd.
+    Prefer Claude Code's project directory. Direct/manual invocation falls
+    back to one cheap `git rev-parse --show-toplevel`, then cwd. Root
+    resolution deliberately does not run `git status`; full Git telemetry is
+    collected only by hook paths that actually need it.
     """
     cwd = Path(cwd)
 
@@ -34,13 +34,9 @@ def resolve_project_root(cwd: Path, project_dir_hint: object = None) -> Path:
     if hinted is not None:
         return hinted
 
-    info = git_state.collect(cwd)
-    root = info.get("root")
-    if info.get("is_repo") and isinstance(root, str) and root:
-        try:
-            return Path(root).resolve()
-        except OSError:
-            pass
+    root = git_state.repository_root(cwd)
+    if root is not None:
+        return root
 
     try:
         return cwd.resolve()

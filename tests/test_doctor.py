@@ -10,7 +10,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from _support import SAMPLE_STATE, SRC_DIR, init_git_repo, write_valid_settings, write_working_state
+from _support import (
+    SAMPLE_STATE,
+    SRC_DIR,
+    init_git_repo,
+    write_runtime_gitignore,
+    write_valid_settings,
+    write_working_state,
+)
 from context_guard import state
 
 
@@ -24,15 +31,38 @@ def run_doctor(cwd: Path, *, project_dir: Path | None = None) -> subprocess.Comp
 
 
 class TestDoctor(unittest.TestCase):
-    def test_healthy_installation_passes(self):
+    def test_healthy_git_installation_passes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            init_git_repo(cwd)
+            write_runtime_gitignore(cwd)
+            write_working_state(cwd, SAMPLE_STATE)
+            write_valid_settings(cwd)
+            result = run_doctor(cwd)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("Hook configuration: ok", result.stdout)
+            self.assertIn("Runtime gitignore: ok", result.stdout)
+
+    def test_unignored_runtime_state_fails_in_git_repo(self):
         with tempfile.TemporaryDirectory() as tmp:
             cwd = Path(tmp)
             init_git_repo(cwd)
             write_working_state(cwd, SAMPLE_STATE)
             write_valid_settings(cwd)
             result = run_doctor(cwd)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Runtime gitignore: unsafe", result.stdout)
+            self.assertIn("WORKING_STATE.md", result.stdout)
+            self.assertIn("sessions/", result.stdout)
+
+    def test_non_git_project_does_not_require_gitignore(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            write_working_state(cwd, SAMPLE_STATE)
+            write_valid_settings(cwd)
+            result = run_doctor(cwd)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertIn("Hook configuration: ok", result.stdout)
+            self.assertIn("Runtime gitignore: not applicable", result.stdout)
 
     def test_empty_hook_arrays_fail(self):
         with tempfile.TemporaryDirectory() as tmp:
