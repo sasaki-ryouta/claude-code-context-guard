@@ -1,0 +1,43 @@
+{
+  "hooks": {
+    "PreCompact": [
+      {
+        "matcher": "manual|auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONPATH=\"$CLAUDE_PROJECT_DIR/src\" python3 -m context_guard pre-compact",
+            "timeout": 15,
+            "statusMessage": "context-guard: checkpointing working state"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONPATH=\"$CLAUDE_PROJECT_DIR/src\" python3 -m context_guard session-start",
+            "timeout": 15,
+            "statusMessage": "context-guard: restoring working state"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "matcher": "manual|auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONPATH=\"$CLAUDE_PROJECT_DIR/src\" python3 -m context_guard post-compact",
+            "timeout": 15,
+            "statusMessage": "context-guard: persisting compaction summary"
+          }
+        ]
+      }
+    ]
+  }
+}

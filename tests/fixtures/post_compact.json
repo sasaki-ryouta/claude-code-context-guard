@@ -1,0 +1,9 @@
+{
+  "session_id": "fixture-session-0001",
+  "transcript_path": "/tmp/context-guard-fixture/transcript.jsonl",
+  "cwd": "/tmp/context-guard-fixture",
+  "permission_mode": "default",
+  "hook_event_name": "PostCompact",
+  "trigger": "auto",
+  "compact_summary": "The user asked to scaffold v0.1. Investigation is complete; implementation is in progress."
+}

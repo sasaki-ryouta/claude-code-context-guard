@@ -1,0 +1,11 @@
+# Runtime state produced by the hooks (SPEC 4): never committed.
+.claude/context-guard/WORKING_STATE.md
+.claude/context-guard/sessions/
+
+# Local hook configuration derived from settings.example.json
+.claude/settings.json
+.claude/settings.local.json
+
+__pycache__/
+*.py[cod]
+.venv/
