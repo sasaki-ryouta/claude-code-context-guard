@@ -22,9 +22,12 @@ def load_fixture(name: str, **overrides) -> dict:
     return payload
 
 
-def run_cli(command: str, stdin_text: str) -> subprocess.CompletedProcess:
+def run_cli(command: str, stdin_text: str, *, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
     """Run the hook entrypoint exactly the way Claude Code would."""
     env = dict(os.environ)
+    env.pop("CLAUDE_PROJECT_DIR", None)
+    if extra_env:
+        env.update(extra_env)
     env["PYTHONPATH"] = str(SRC_DIR)
     return subprocess.run(
         [sys.executable, "-m", "context_guard", command],
@@ -37,29 +40,24 @@ def run_cli(command: str, stdin_text: str) -> subprocess.CompletedProcess:
 
 
 def init_git_repo(path: Path) -> None:
-    """Create a throwaway git repo with one commit, or skip the caller's git expectations."""
     env = dict(os.environ)
-    env.update(
-        {
-            "GIT_AUTHOR_NAME": "test",
-            "GIT_AUTHOR_EMAIL": "test@example.com",
-            "GIT_COMMITTER_NAME": "test",
-            "GIT_COMMITTER_EMAIL": "test@example.com",
-        }
-    )
-    for args in (
-        ["init", "-q", "-b", "work"],
-        ["commit", "-q", "--allow-empty", "-m", "root"],
-    ):
-        subprocess.run(
-            ["git", *args], cwd=path, env=env, check=True, capture_output=True
-        )
+    env.update({"GIT_AUTHOR_NAME":"test","GIT_AUTHOR_EMAIL":"test@example.com","GIT_COMMITTER_NAME":"test","GIT_COMMITTER_EMAIL":"test@example.com"})
+    for args in (["init","-q","-b","work"],["commit","-q","--allow-empty","-m","root"]):
+        subprocess.run(["git", *args], cwd=path, env=env, check=True, capture_output=True)
 
 
-def write_working_state(cwd: Path, text: str) -> Path:
-    target = cwd / ".claude" / "context-guard" / "WORKING_STATE.md"
+def write_working_state(project_root: Path, text: str) -> Path:
+    target = project_root / ".claude" / "context-guard" / "WORKING_STATE.md"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(text, encoding="utf-8")
+    return target
+
+
+def write_valid_settings(project_root: Path) -> Path:
+    source = REPO_ROOT / ".claude" / "settings.example.json"
+    target = project_root / ".claude" / "settings.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
     return target
 
 

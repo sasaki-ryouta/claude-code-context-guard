@@ -21,9 +21,10 @@ class Checkpoint:
     timestamp: str
     session_id: object
     safe_session_id: str
+    compaction_sequence: int
     trigger: object
     cwd: str
+    project_root: str
     transcript_path: str | None
     git: dict
     working_state: WorkingStateRecord
-
