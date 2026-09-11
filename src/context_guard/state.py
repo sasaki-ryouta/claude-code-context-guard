@@ -20,18 +20,16 @@ _RECOVERY_INSTRUCTIONS = (
 )
 
 
-def working_state_path(cwd: Path) -> Path:
+def working_state_path(project_root: Path) -> Path:
     from .storage import guard_root
 
-    return guard_root(Path(cwd)) / "WORKING_STATE.md"
+    return guard_root(Path(project_root)) / "WORKING_STATE.md"
 
 
-def read_working_state(cwd: Path) -> str | None:
-    path = working_state_path(cwd)
+def read_working_state(project_root: Path) -> str | None:
+    path = working_state_path(project_root)
     if not path.is_file():
         return None
-    # errors="replace" keeps a stray non-UTF-8 byte from silently costing the
-    # whole recovery context; the hash is over the decoded text either way.
     return path.read_text(encoding="utf-8", errors="replace")
 
 
@@ -50,11 +48,15 @@ def truncate_state(text: str, limit: int = WORKING_STATE_BUDGET) -> tuple[str, b
     return text[: limit - len(marker)] + marker, True
 
 
-def build_recovery_context(cwd: Path) -> str:
+def build_recovery_context(project_root: Path, git_cwd: Path | None = None) -> str:
     from . import git_state
 
-    state_text = read_working_state(cwd)
-    git_text = git_state.render(git_state.collect(Path(cwd)), GIT_BUDGET)
+    project_root = Path(project_root)
+    state_text = read_working_state(project_root)
+    git_text = git_state.render(
+        git_state.collect(Path(git_cwd) if git_cwd is not None else project_root),
+        GIT_BUDGET,
+    )
     if state_text is None:
         context = (
             f"{_RECOVERY_INSTRUCTIONS}\n\n"
@@ -62,7 +64,7 @@ def build_recovery_context(cwd: Path) -> str:
             f"Current git state:\n{git_text}"
         )
     else:
-        full_path = str(working_state_path(cwd))
+        full_path = str(working_state_path(project_root))
         truncation_note = f"\nFull WORKING_STATE.md: {full_path}"
         state_limit = max(1, WORKING_STATE_BUDGET - len(truncation_note))
         bounded_state, truncated = truncate_state(state_text, state_limit)
@@ -76,4 +78,3 @@ def build_recovery_context(cwd: Path) -> str:
     if len(context) <= TOTAL_BUDGET:
         return context
     return context[:TOTAL_BUDGET]
-

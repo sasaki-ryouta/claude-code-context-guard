@@ -1,130 +1,130 @@
 # Claude Code Context Guard
 
-Claude Code の context compaction を跨いで**作業状態だけ**を外部化し、compaction 後に
-**最小限だけ**注入し直す project-local な hook 実装。
+Claude Code の context compaction を跨いで、**高価値な作業状態だけ**を project-local に退避し、compaction 後に小さな recovery context として戻す lightweight hook 実装です。
 
-- native compaction を置き換えない。二重要約もしない
-- LLM を呼ばない。network も database も使わない
-- runtime dependency は **Python 標準ライブラリのみ**
-- hook 障害は **fail-open**。compaction を止めない
+v0.1.1 の設計は意図的に単純です。
 
-仕様は [SPEC.md](SPEC.md)、設計根拠は [docs/architecture.md](docs/architecture.md)、
-現行 Claude Code で実測した hook schema は [docs/compatibility.md](docs/compatibility.md)。
+- native compaction を置き換えない
+- PreCompact で別 LLM を呼ばない
+- transcript 本文を解析・複製しない
+- code / diff / command log を durable memory にしない
+- runtime dependency は Python 3.11+ の標準ライブラリのみ
+- hook failure は fail-open。compaction を止めない
+- `WORKING_STATE.md` + current git state だけを bounded rehydration する
 
-## 動作確認済み環境
+仕様は [SPEC.md](SPEC.md)、設計は [docs/architecture.md](docs/architecture.md)、Claude Code compatibility は [docs/compatibility.md](docs/compatibility.md)、運用判断は [docs/operations.md](docs/operations.md) を参照してください。
 
-| | |
+## 検証対象
+
+| 項目 | 状態 |
 |---|---|
-| Claude Code | 2.1.245 |
+| Claude Code | 2.1.245 で hook schema を確認 |
 | Python | 3.11+ |
-| OS | macOS (darwin)。Linux も動作想定 |
+| macOS | ローカル検証対象 |
+| Linux | GitHub Actions で 3.11 / 3.12 / 3.13 を検証 |
 
-## 5 分セットアップ
+## 仕組み
 
-### 1. リポジトリを置く (30 秒)
+```text
+WORKING_STATE.md
+      |
+      | semantic boundary で Claude が更新
+      v
+PreCompact -> checkpoint + per-compaction archive
+      |
+native Claude Code compact
+      |
+PostCompact -> native summary persistence
+      |
+SessionStart(source=compact) -> <= 9,000 chars rehydrate
+```
 
-対象プロジェクトの中か、隣に clone する。
+`cwd` が session 中に `cd` で変わっても、hook command が継承する `CLAUDE_PROJECT_DIR` を stable project root として優先します。直接呼び出し時は Git root、それも無ければ current `cwd` にフォールバックします。
+
+## 5分セットアップ
+
+### 1. Context Guard を配置
 
 ```bash
 git clone <this-repo> claude-code-context-guard
 ```
 
-このリポジトリ自身を対象プロジェクトとして使う場合は、そのまま次へ進む。
+### 2. project-local hook を設定
 
-### 2. hook を設定する (2 分)
-
-対象プロジェクトの `.claude/settings.json` に hook を登録する。
-雛形をコピーする:
+この repository 自身なら:
 
 ```bash
 cp .claude/settings.example.json .claude/settings.json
 ```
 
-> [!IMPORTANT]
-> `~/.claude/settings.json`（ユーザー global）は**触らない**。project-local だけで完結する。
-
-雛形は `$CLAUDE_PROJECT_DIR/src` を `PYTHONPATH` に渡す。
-**別のプロジェクトから使う場合**は、3 箇所の `command` を context-guard の実際の位置に書き換える:
+別 project から使う場合は、対象 project の `.claude/settings.json` に3つの hookを登録し、`PYTHONPATH` だけ Context Guard の絶対パスへ変更してください。
 
 ```json
 "command": "PYTHONPATH=\"/absolute/path/to/claude-code-context-guard/src\" python3 -m context_guard pre-compact"
 ```
 
-登録される hook は 3 つ:
+`~/.claude/settings.json` は変更しません。
 
-| event | matcher | 役割 |
+| event | matcher | role |
 |---|---|---|
-| `PreCompact` | `manual\|auto` | compaction 直前に working state を checkpoint する |
-| `SessionStart` | `compact` | compaction 直後に recovery context を注入する |
-| `PostCompact` | `manual\|auto` | native summary を永続化する |
+| `PreCompact` | `manual\|auto` | working state checkpoint |
+| `SessionStart` | `compact` | bounded rehydration |
+| `PostCompact` | `manual\|auto` | native summary persistence |
 
-### 3. WORKING_STATE を作る (1 分)
+### 3. WORKING_STATE を作成
 
 ```bash
 mkdir -p .claude/context-guard
 cp .claude/context-guard/WORKING_STATE.template.md .claude/context-guard/WORKING_STATE.md
 ```
 
-`WORKING_STATE.md` を埋める。書式とルールは [SPEC.md](SPEC.md) §5、
-更新タイミングは root [CLAUDE.md](CLAUDE.md)。**6,000 characters 以内**に保つ。
+`WORKING_STATE.md` は 6,000 characters 以下を目安にします。goal、acceptance criteria、current phase、decision/rationale、未解決 failure、next action、file/symbol/test/ADR pointer を保持します。
 
-### 4. CLAUDE.md に Compact Instructions を置く (1 分)
+### 4. CLAUDE.md を導入
 
-このリポジトリの [CLAUDE.md](CLAUDE.md) の `# Compact Instructions` 節と
-`## Working state instructions` 節を、対象プロジェクトの `CLAUDE.md` にコピーする。
+この repository の `CLAUDE.md` にある `Working state instructions`、`When to recommend /compact`、`Compact Instructions` を対象 project の `CLAUDE.md` へコピーします。
 
-### 5. 検証する (30 秒)
+### 5. doctor
 
 ```bash
-PYTHONPATH=src python3 -m context_guard doctor
+PYTHONPATH=/absolute/path/to/claude-code-context-guard/src python3 -m context_guard doctor
 ```
 
-Claude Code を再起動して設定を読み込ませる。
+この repository 自身なら `PYTHONPATH=src python3 -m context_guard doctor`。
 
-## 動作確認
+`doctor` は Python、resolved project root、WORKING_STATE の存在/budget、3 hook の event/matcher/command wiring、importability、git status を検査し、設定は変更しません。
 
-### hook を手で叩く
+## 日常運用
 
-Claude Code を起動せずに 3 つの hook を検証できる。
+基本は **semantic compaction** です。investigation完了、plan確定、root cause判明、major implementation完了、verification移行などの境界で、まず `WORKING_STATE.md` を更新してから `/compact` を実行します。auto-compaction は safety net として扱います。v0.1.1 は特定の token threshold に依存しません。
 
-```bash
-# PreCompact: checkpoint が作られる
-echo '{"session_id":"smoke-1","cwd":"'"$PWD"'","hook_event_name":"PreCompact","trigger":"manual","transcript_path":"/dev/null"}' \
-  | PYTHONPATH=src python3 -m context_guard pre-compact
-cat .claude/context-guard/sessions/smoke-1/checkpoint.json
+## runtime artifacts
+
+```text
+.claude/context-guard/
+├── WORKING_STATE.md
+└── sessions/
+    └── <safe-session-id>/
+        ├── checkpoint.json
+        ├── checkpoint.md
+        ├── compact-summary.md
+        ├── events.jsonl
+        └── compactions/
+            ├── 000001/
+            │   ├── checkpoint.json
+            │   ├── checkpoint.md
+            │   └── compact-summary.md
+            └── 000002/
+                └── ...
 ```
 
-```bash
-# SessionStart(compact): additionalContext が返る
-echo '{"session_id":"smoke-1","cwd":"'"$PWD"'","hook_event_name":"SessionStart","source":"compact"}' \
-  | PYTHONPATH=src python3 -m context_guard session-start
-```
+top-level checkpoint/summary は最新 view、`compactions/<sequence>/` は benchmark と事後検証用の履歴です。すべて `.gitignore` 対象で、自動 commit しません。
 
-```bash
-# SessionStart(startup): 何も注入しない（出力なし）
-echo '{"session_id":"smoke-1","cwd":"'"$PWD"'","hook_event_name":"SessionStart","source":"startup"}' \
-  | PYTHONPATH=src python3 -m context_guard session-start
-```
+## Privacy / sensitive data
 
-```bash
-# PostCompact: summary が保存される
-echo '{"session_id":"smoke-1","cwd":"'"$PWD"'","hook_event_name":"PostCompact","trigger":"auto","compact_summary":"hello"}' \
-  | PYTHONPATH=src python3 -m context_guard post-compact
-cat .claude/context-guard/sessions/smoke-1/compact-summary.md
-```
+Context Guard 自身は transcript 本文を開かず、secret/token/password を探索・抽出しません。ただし、**secret redaction 機能もありません**。
 
-```bash
-# fail-open: 壊れた入力でも exit 0
-echo 'not json' | PYTHONPATH=src python3 -m context_guard pre-compact; echo "exit=$?"
-```
-
-### Claude Code 上で確認する
-
-1. 何か作業して `WORKING_STATE.md` を更新する
-2. `/compact` を実行する
-3. compaction 後の最初の応答に、注入された goal / next action が反映されているか見る
-4. `.claude/context-guard/sessions/<session-id>/events.jsonl` に
-   `pre_compact` → `post_compact` → `rehydrate` が並んでいるか確認する
+`WORKING_STATE.md` snapshot と Claude Code の native `compact_summary` はローカルへ verbatim 保存されるため、その中に機密情報が含まれていれば runtime artifact に残ります。credential を `WORKING_STATE.md` に書かず、`.claude/context-guard/` は local sensitive runtime data として扱ってください。
 
 ## テスト
 
@@ -132,48 +132,30 @@ echo 'not json' | PYTHONPATH=src python3 -m context_guard pre-compact; echo "exi
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
-第三者ライブラリは不要。`unittest` のみ。
+CI でも同じ suite を Python 3.11 / 3.12 / 3.13 で実行します。
 
-## 生成されるファイル
+## Smoke test
 
-```text
-.claude/context-guard/
-├── WORKING_STATE.md            # あなたが保守する working memory
-└── sessions/
-    └── <safe-session-id>/
-        ├── checkpoint.json     # PreCompact の構造化 checkpoint
-        ├── checkpoint.md       # 同じ内容の人間可読版
-        ├── compact-summary.md  # PostCompact が保存した native summary
-        └── events.jsonl        # append-only の観測ログ
+```bash
+echo '{"session_id":"smoke-1","cwd":"'"$PWD"'","hook_event_name":"PreCompact","trigger":"manual","transcript_path":"/dev/null"}' | PYTHONPATH=src python3 -m context_guard pre-compact
+
+echo '{"session_id":"smoke-1","cwd":"'"$PWD"'","hook_event_name":"SessionStart","source":"compact"}' | PYTHONPATH=src python3 -m context_guard session-start
+
+echo '{"session_id":"smoke-1","cwd":"'"$PWD"'","hook_event_name":"PostCompact","trigger":"manual","compact_summary":"smoke summary"}' | PYTHONPATH=src python3 -m context_guard post-compact
 ```
 
-`.gitignore` で除外済み。**自動 commit はしない**。
-
-## 保存しないもの
-
-- transcript 本文（`transcript_path` は文字列として記録するだけで、開かない）
-- source code 本文 / diff 全文 / command output 全文
-- secret / token / password
-
-理由は [docs/architecture.md](docs/architecture.md) §2。
+Claude Code 上では `WORKING_STATE.md` を更新して `/compact` を実行し、`events.jsonl` に compaction boundary events が残ることを確認します。実際の hook order は installed Claude Code build の挙動を優先してください。
 
 ## Uninstall
 
-```bash
-# 1. hook 登録を外す（.claude/settings.json の hooks から 3 つのブロックを削除）
-#    settings.json 全体が context-guard 専用なら、ファイルごと削除してよい
-rm .claude/settings.json
+1. 対象 project の `.claude/settings.json` / `.claude/settings.local.json` から3 hookを削除
+2. runtime state が不要なら `.claude/context-guard/WORKING_STATE.md` と `sessions/` を削除
+3. `CLAUDE.md` から Context Guard 用 instruction を削除
 
-# 2. runtime state を消す
-rm -rf .claude/context-guard/sessions .claude/context-guard/WORKING_STATE.md
+Context Guard は global settings を自動変更しません。
 
-# 3. 対象プロジェクトの CLAUDE.md から Compact Instructions 節を消す（任意）
-```
+## 現在の位置づけ
 
-ユーザー global の `~/.claude/settings.json` は最初から変更していないので、戻す作業はない。
+v0.1.1 は **operational baseline** です。外部 memory の有効性を証明したものではありません。次は [docs/benchmark-plan.md](docs/benchmark-plan.md) に従って native compaction、state-only、full guard を ablation し、改善が測定できた機能だけを追加します。
 
-## v0.1 の位置づけ
-
-v0.1 は**測定のための基盤**であり、効果が証明された構成ではない。
-native compaction との比較計画は [docs/benchmark-plan.md](docs/benchmark-plan.md)、
-段階計画は [docs/roadmap.md](docs/roadmap.md)。
+FTS/BM25、embeddings、vector DB、knowledge graph、automatic LLM handoff はまだ default architecture に入れません。

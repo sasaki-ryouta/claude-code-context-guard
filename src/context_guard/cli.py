@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import sys
 from pathlib import Path
 
-from . import git_state, hooks, state
+from . import git_state, hooks, project, state
 
 
 _HOOKS = {
@@ -16,10 +17,14 @@ _HOOKS = {
     "post-compact": hooks.handle_post_compact,
 }
 
+_REQUIRED_HOOKS = {
+    "PreCompact": ({"manual", "auto"}, "pre-compact"),
+    "SessionStart": ({"compact"}, "session-start"),
+    "PostCompact": ({"manual", "auto"}, "post-compact"),
+}
+
 
 def _read_payload() -> dict | None:
-    # A pathological payload raises things no narrow except tuple predicts:
-    # RecursionError from the recursive decoder, MemoryError from a huge read.
     try:
         raw = sys.stdin.read()
         if not raw.strip():
@@ -35,6 +40,9 @@ def _run_hook(command: str) -> int:
         payload = _read_payload()
         if payload is None:
             return 0
+        project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
+        if project_dir:
+            payload["_context_guard_project_dir"] = project_dir
         output = _HOOKS[command](payload)
         if isinstance(output, dict) and output:
             sys.stdout.write(json.dumps(output, ensure_ascii=False) + "\n")
@@ -43,43 +51,89 @@ def _run_hook(command: str) -> int:
     return 0
 
 
+def _matcher_tokens(raw: object) -> set[str]:
+    if not isinstance(raw, str):
+        return set()
+    return {part.strip() for part in raw.split("|") if part.strip()}
+
+
+def _has_expected_hook(settings: dict, event: str, matcher: set[str], subcommand: str) -> bool:
+    hooks_config = settings.get("hooks")
+    if not isinstance(hooks_config, dict):
+        return False
+    groups = hooks_config.get(event)
+    if not isinstance(groups, list):
+        return False
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        if _matcher_tokens(group.get("matcher")) != matcher:
+            continue
+        entries = group.get("hooks")
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict) or entry.get("type") != "command":
+                continue
+            command = entry.get("command")
+            if isinstance(command, str) and "context_guard" in command and subcommand in command:
+                return True
+    return False
+
+
+def _validate_settings(settings: object) -> tuple[bool, list[str]]:
+    if not isinstance(settings, dict):
+        return False, ["top-level JSON is not an object"]
+    missing: list[str] = []
+    for event, (matcher, subcommand) in _REQUIRED_HOOKS.items():
+        if not _has_expected_hook(settings, event, matcher, subcommand):
+            missing.append(event)
+    return not missing, missing
+
+
 def _doctor() -> int:
     cwd = Path.cwd()
     problems = False
+    project_root = project.resolve_project_root(cwd, os.environ.get("CLAUDE_PROJECT_DIR"))
 
     python_ok = sys.version_info >= (3, 11)
     print(f"Python version: {sys.version.split()[0]} ({'ok' if python_ok else 'unsupported'})")
     problems |= not python_ok
 
-    root_ok = cwd.is_dir()
-    print(f"Project root: {cwd} ({'ok' if root_ok else 'missing'})")
+    root_ok = project_root.is_dir()
+    print(f"Project root: {project_root} ({'ok' if root_ok else 'missing'})")
     problems |= not root_ok
 
-    working_path = state.working_state_path(cwd)
+    working_path = state.working_state_path(project_root)
     if not working_path.is_file():
         print(f"WORKING_STATE: missing ({working_path})")
+        problems = True
     else:
-        chars = len(state.read_working_state(cwd) or "")
+        chars = len(state.read_working_state(project_root) or "")
         budget_ok = chars <= state.WORKING_STATE_BUDGET
-        print(
-            f"WORKING_STATE: {chars} characters "
-            f"({'ok' if budget_ok else 'over budget'})"
-        )
+        print(f"WORKING_STATE: {chars} characters ({'ok' if budget_ok else 'over budget'})")
         problems |= not budget_ok
 
-    settings_paths = (cwd / ".claude" / "settings.json", cwd / ".claude" / "settings.local.json")
+    settings_paths = (
+        project_root / ".claude" / "settings.json",
+        project_root / ".claude" / "settings.local.json",
+    )
     settings_ok = False
+    settings_detail = "missing"
     for settings_path in settings_paths:
         if not settings_path.is_file():
             continue
         try:
             settings = json.loads(settings_path.read_text(encoding="utf-8"))
-            settings_ok = isinstance(settings, dict) and isinstance(settings.get("hooks"), dict)
+            valid, missing = _validate_settings(settings)
         except (OSError, UnicodeError, json.JSONDecodeError):
-            settings_ok = False
-        if settings_ok:
+            valid, missing = False, ["invalid JSON"]
+        if valid:
+            settings_ok = True
+            settings_detail = str(settings_path)
             break
-    print(f"Hook configuration: {'present' if settings_ok else 'missing or invalid'}")
+        settings_detail = f"{settings_path}: missing/invalid {', '.join(missing)}"
+    print(f"Hook configuration: {'ok' if settings_ok else 'invalid'} ({settings_detail})")
     problems |= not settings_ok
 
     try:
@@ -113,4 +167,3 @@ def main(argv: list[str] | None = None) -> int:
     if command in _HOOKS:
         return _run_hook(command)
     return 0
-
