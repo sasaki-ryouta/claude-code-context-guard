@@ -12,7 +12,7 @@ v0.1.1 の設計は意図的に単純です。
 - hook failure は fail-open。compaction を止めない
 - `WORKING_STATE.md` + current git state だけを bounded rehydration する
 
-仕様は [SPEC.md](SPEC.md)、設計は [docs/architecture.md](docs/architecture.md)、Claude Code compatibility は [docs/compatibility.md](docs/compatibility.md)、運用判断は [docs/operations.md](docs/operations.md) を参照してください。
+仕様は [SPEC.md](SPEC.md)、設計は [docs/architecture.md](docs/architecture.md)、Claude Code compatibility は [docs/compatibility.md](docs/compatibility.md)、運用判断は [docs/operations.md](docs/operations.md) を参照してください。実 Claude Code lifecycle の検証手順は [docs/live-smoke.md](docs/live-smoke.md) に固定しています。
 
 ## 検証対象
 
@@ -20,7 +20,7 @@ v0.1.1 の設計は意図的に単純です。
 |---|---|
 | Claude Code | 2.1.245 で hook schema を確認 |
 | Python | 3.11+ |
-| macOS | ローカル検証対象 |
+| macOS | ローカル lifecycle smoke を `docs/live-smoke.md` で実施 |
 | Linux | GitHub Actions で 3.11 / 3.12 / 3.13 を検証 |
 
 ## 仕組み
@@ -46,7 +46,7 @@ SessionStart(source=compact) -> <= 9,000 chars rehydrate
 ### 1. Context Guard を配置
 
 ```bash
-git clone <this-repo> claude-code-context-guard
+git clone https://github.com/sasaki-ryouta/claude-code-context-guard.git
 ```
 
 ### 2. project-local hook を設定
@@ -98,6 +98,8 @@ PYTHONPATH=/absolute/path/to/claude-code-context-guard/src python3 -m context_gu
 
 基本は **semantic compaction** です。investigation完了、plan確定、root cause判明、major implementation完了、verification移行などの境界で、まず `WORKING_STATE.md` を更新してから `/compact` を実行します。auto-compaction は safety net として扱います。v0.1.1 は特定の token threshold に依存しません。
 
+Claude Code または Context Guard を更新した後は、[live smoke runbook](docs/live-smoke.md) を1回通してから日常利用へ戻します。
+
 ## runtime artifacts
 
 ```text
@@ -136,15 +138,7 @@ CI でも同じ suite を Python 3.11 / 3.12 / 3.13 で実行します。
 
 ## Smoke test
 
-```bash
-echo '{"session_id":"smoke-1","cwd":"'"$PWD"'","hook_event_name":"PreCompact","trigger":"manual","transcript_path":"/dev/null"}' | PYTHONPATH=src python3 -m context_guard pre-compact
-
-echo '{"session_id":"smoke-1","cwd":"'"$PWD"'","hook_event_name":"SessionStart","source":"compact"}' | PYTHONPATH=src python3 -m context_guard session-start
-
-echo '{"session_id":"smoke-1","cwd":"'"$PWD"'","hook_event_name":"PostCompact","trigger":"manual","compact_summary":"smoke summary"}' | PYTHONPATH=src python3 -m context_guard post-compact
-```
-
-Claude Code 上では `WORKING_STATE.md` を更新して `/compact` を実行し、`events.jsonl` に compaction boundary events が残ることを確認します。実際の hook order は installed Claude Code build の挙動を優先してください。
+fixture/CLI smoke と real lifecycle smoke を区別します。unit/CI は hook handler と persistence contract を検証し、実際の Claude Code が hook を発火する境界は [docs/live-smoke.md](docs/live-smoke.md) で確認します。
 
 ## Uninstall
 
