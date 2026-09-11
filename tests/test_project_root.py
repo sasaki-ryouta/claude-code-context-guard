@@ -6,6 +6,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from _support import SAMPLE_STATE, init_git_repo, load_fixture, run_cli, write_working_state
 from context_guard import project, storage
@@ -19,6 +20,15 @@ class TestProjectRootResolution(unittest.TestCase):
             nested = root / "src" / "pkg"
             nested.mkdir(parents=True)
             self.assertEqual(project.resolve_project_root(nested), root.resolve())
+
+    def test_git_fallback_does_not_call_full_collect(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_git_repo(root)
+            nested = root / "src"
+            nested.mkdir()
+            with mock.patch("context_guard.project.git_state.collect", side_effect=AssertionError("full collect must not be used")):
+                self.assertEqual(project.resolve_project_root(nested), root.resolve())
 
     def test_valid_project_dir_hint_wins(self):
         with tempfile.TemporaryDirectory() as tmp:

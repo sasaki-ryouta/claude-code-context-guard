@@ -23,7 +23,6 @@ def load_fixture(name: str, **overrides) -> dict:
 
 
 def run_cli(command: str, stdin_text: str, *, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
-    """Run the hook entrypoint exactly the way Claude Code would."""
     env = dict(os.environ)
     env.pop("CLAUDE_PROJECT_DIR", None)
     if extra_env:
@@ -58,6 +57,16 @@ def write_valid_settings(project_root: Path) -> Path:
     target = project_root / ".claude" / "settings.json"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    return target
+
+
+def write_runtime_gitignore(project_root: Path) -> Path:
+    target = project_root / ".gitignore"
+    target.write_text(
+        ".claude/context-guard/WORKING_STATE.md\n"
+        ".claude/context-guard/sessions/\n",
+        encoding="utf-8",
+    )
     return target
 
 

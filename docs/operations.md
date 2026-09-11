@@ -6,7 +6,7 @@ status: operational-baseline
 type: reference
 ---
 
-# Operations (v0.1.1)
+# Operations (v0.1.2)
 
 日常運用の目的は active working set を高 signal に保つこと。
 
@@ -23,45 +23,65 @@ type: reference
 
 ## 2. Stable project root
 
-session 中に `cd src` しても state は通常 `$CLAUDE_PROJECT_DIR/.claude/context-guard` に残る。fallback は Git worktree root、その次に current cwd。checkpoint には `cwd` と `project_root` の両方を記録する。
+session 中に `cd src` しても state は通常 `$CLAUDE_PROJECT_DIR/.claude/context-guard` に残る。fallback は lightweightな`git rev-parse --show-toplevel`、その次にcurrent cwd。root resolutionでは`git status`を実行せず、full git telemetryが必要な箇所だけで収集する。checkpointには`cwd`と`project_root`を両方記録する。
 
-## 3. doctor
+## 3. Target-project Git safety
+
+別repositoryで使う場合、このrepositoryの`.gitignore`は効かない。target側で最低限以下をignoreする。
+
+```gitignore
+.claude/context-guard/WORKING_STATE.md
+.claude/context-guard/sessions/
+```
+
+absolute `PYTHONPATH`を含むmachine-local hook wiringは`.claude/settings.local.json`に置き、このfileもtarget側でignoreすることを推奨する。
+
+`doctor`はGit projectに対してeffective `git check-ignore`を検査し、runtime pathsがignoreされていない、またはruntime artifactsが既にtrackedの場合はfailする。自動修正はしない。
+
+## 4. doctor
 
 ```bash
 PYTHONPATH=/path/to/context-guard/src python3 -m context_guard doctor
 ```
 
-Python、project root、WORKING_STATE、budget、3 hook の event/matcher/command wiring、importability、git status を検査する。空の hook array や typo は healthy とみなさない。
+Python、project root、WORKING_STATE、budget、3 hookのevent/matcher/command wiring、importability、git status、runtime Git safetyを検査する。空のhook arrayやtypoはhealthyとみなさない。
 
-## 4. Telemetry
+## 5. Telemetry
 
-`events.jsonl` に `pre_compact` / `post_compact` / `rehydrate` / `hook_error` を記録する。可能な event には `compaction_sequence`、`cwd`、`project_root`、size/hash、branch/HEAD、`duration_ms` を含める。
+`events.jsonl` に `pre_compact` / `post_compact` / `rehydrate` / `hook_error` を記録する。可能なeventには`compaction_sequence`、`cwd`、`project_root`、size/hash、branch/HEAD、`duration_ms`を含める。
 
-複数 compaction の provenance は `sessions/<id>/compactions/000001/` 以下。
+複数compactionのprovenanceは`sessions/<id>/compactions/000001/`以下。
 
-## 5. Troubleshooting
+## 6. Troubleshooting
 
 | symptom | check |
 |---|---|
 | compaction後にstateが戻らない | `doctor`、SessionStart matcher、events |
 | WORKING_STATE missing | resolved project root |
+| `Runtime gitignore: unsafe` | target `.gitignore` と既tracked runtime files |
 | stateが古い | compact前にstateを更新したか |
 | hook_error | PYTHONPATH、write permission、project root |
 | archive summary無し | PostCompact event |
 | sessions増加 | retentionは手動 |
 
-## 6. Auto-compaction threshold
+既にruntime stateをGitへadd/commitしてしまった場合、ignore ruleだけではtracked状態は解除されない。内容を確認し、必要に応じてGit index/historyから除去し、sensitive credentialが含まれていた場合はrotateする。
 
-v0.1.1 は特定 threshold を設定しない。Claude Code 2.1.245 binary では `autoCompactWindow` / `CLAUDE_CODE_AUTO_COMPACT_WINDOW` の存在を確認したが compatibility 確認時点で公式 settings docs に無いため default recommendation に含めない。semantic manual compaction + native auto safety net を使う。
+## 7. Auto-compaction threshold
 
-## 7. Sensitive data
+v0.1.2 は特定 threshold を設定しない。Claude Code 2.1.245 binaryでは`autoCompactWindow` / `CLAUDE_CODE_AUTO_COMPACT_WINDOW`の存在を確認したがcompatibility確認時点で公式settings docsに無いためdefault recommendationに含めない。semantic manual compaction + native auto safety netを使う。
 
-`.claude/context-guard/` は gitignored だが secret store ではない。`WORKING_STATE` snapshot と native compact summary は verbatim 保存する。含まれた sensitive data も残る。誤って credential を含めた場合は該当 session を削除し、credential を rotate する。
+## 8. Sensitive data
 
-## 8. Retention
+`.claude/context-guard/` はsecret storeではない。`WORKING_STATE` snapshotとnative compact summaryはverbatim保存する。含まれたsensitive dataも残る。誤ってcredentialを含めた場合は該当sessionを削除し、credentialをrotateする。
 
-v0.1.1 は benchmark provenance のため自動 retention をしない。不要な session は `rm -rf .claude/context-guard/sessions/<session-id>` で削除する。
+## 9. Retention
 
-## 9. Upgrade / uninstall
+v0.1.2 はbenchmark provenanceのため自動retentionをしない。不要なsessionは`rm -rf .claude/context-guard/sessions/<session-id>`で削除する。
 
-upgrade後は `doctor` と unittest suite を実行する。uninstall は project-local hook entries と runtime state を削除する。global settings は自動変更しない。
+## 10. Live validation
+
+Claude CodeまたはContext Guard更新後は`docs/live-smoke.md`を実行し、実際の`/compact` lifecycleでrehydrationとarchiveを確認する。
+
+## 11. Upgrade / uninstall
+
+upgrade後は`doctor`、unittest suite、live smokeの順で確認する。uninstallはproject-local hook entriesとruntime stateを削除する。global settingsは自動変更しない。

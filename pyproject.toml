@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "claude-code-context-guard"
-version = "0.1.1"
+version = "0.1.2"
 description = "Project-local working-state checkpoint and rehydration around Claude Code context compaction"
 requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
-# Intentionally empty: tests run on stdlib unittest (SPEC 3).
+# Intentionally empty: tests run on stdlib unittest.
 
 [tool.setuptools]
 package-dir = {"" = "src"}

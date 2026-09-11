@@ -2,7 +2,7 @@
 
 Claude Code の context compaction を跨いで、**高価値な作業状態だけ**を project-local に退避し、compaction 後に小さな recovery context として戻す lightweight hook 実装です。
 
-v0.1.1 の設計は意図的に単純です。
+v0.1.2 の設計は意図的に単純です。
 
 - native compaction を置き換えない
 - PreCompact で別 LLM を呼ばない
@@ -20,7 +20,7 @@ v0.1.1 の設計は意図的に単純です。
 |---|---|
 | Claude Code | 2.1.245 で hook schema を確認 |
 | Python | 3.11+ |
-| macOS | ローカル lifecycle smoke を `docs/live-smoke.md` で実施 |
+| macOS | lifecycle smoke runbook を用意。version組み合わせごとに実施 |
 | Linux | GitHub Actions で 3.11 / 3.12 / 3.13 を検証 |
 
 ## 仕組み
@@ -49,7 +49,25 @@ SessionStart(source=compact) -> <= 9,000 chars rehydrate
 git clone https://github.com/sasaki-ryouta/claude-code-context-guard.git
 ```
 
-### 2. project-local hook を設定
+### 2. target project の local state をGitから除外
+
+Context Guard自身の`.gitignore`は別repositoryには効きません。**target project側**の`.gitignore`へ最低限以下を追加してください。
+
+```gitignore
+# Claude Code Context Guard local runtime
+.claude/context-guard/WORKING_STATE.md
+.claude/context-guard/sessions/
+```
+
+外部projectからabsolute `PYTHONPATH`でContext Guardを呼ぶ場合は、machine-local設定をcommitしないためこれも推奨します。
+
+```gitignore
+.claude/settings.local.json
+```
+
+`doctor` はGit projectでruntime stateがeffective ignore対象になっていない場合、unsafeとして失敗します。ignore設定自体は自動変更しません。
+
+### 3. project-local hook を設定
 
 この repository 自身なら:
 
@@ -57,7 +75,7 @@ git clone https://github.com/sasaki-ryouta/claude-code-context-guard.git
 cp .claude/settings.example.json .claude/settings.json
 ```
 
-別 project から使う場合は、対象 project の `.claude/settings.json` に3つの hookを登録し、`PYTHONPATH` だけ Context Guard の絶対パスへ変更してください。
+別 project から使う場合は **`.claude/settings.local.json`** に3つのhookを登録し、`PYTHONPATH`をContext Guardの絶対パスへ変更してください。machine固有absolute pathを共有settingsへ入れないためです。
 
 ```json
 "command": "PYTHONPATH=\"/absolute/path/to/claude-code-context-guard/src\" python3 -m context_guard pre-compact"
@@ -71,20 +89,19 @@ cp .claude/settings.example.json .claude/settings.json
 | `SessionStart` | `compact` | bounded rehydration |
 | `PostCompact` | `manual\|auto` | native summary persistence |
 
-### 3. WORKING_STATE を作成
+### 4. WORKING_STATE を作成
 
 ```bash
 mkdir -p .claude/context-guard
-cp .claude/context-guard/WORKING_STATE.template.md .claude/context-guard/WORKING_STATE.md
+cp /path/to/claude-code-context-guard/.claude/context-guard/WORKING_STATE.template.md \
+  .claude/context-guard/WORKING_STATE.md
 ```
 
 `WORKING_STATE.md` は 6,000 characters 以下を目安にします。goal、acceptance criteria、current phase、decision/rationale、未解決 failure、next action、file/symbol/test/ADR pointer を保持します。
 
-### 4. CLAUDE.md を導入
+### 5. CLAUDE.md を導入して doctor
 
-この repository の `CLAUDE.md` にある `Working state instructions`、`When to recommend /compact`、`Compact Instructions` を対象 project の `CLAUDE.md` へコピーします。
-
-### 5. doctor
+Context Guard repository の `CLAUDE.md` にある `Working state instructions`、`When to recommend /compact`、`Compact Instructions` をtarget projectの`CLAUDE.md`へコピーします。
 
 ```bash
 PYTHONPATH=/absolute/path/to/claude-code-context-guard/src python3 -m context_guard doctor
@@ -92,11 +109,11 @@ PYTHONPATH=/absolute/path/to/claude-code-context-guard/src python3 -m context_gu
 
 この repository 自身なら `PYTHONPATH=src python3 -m context_guard doctor`。
 
-`doctor` は Python、resolved project root、WORKING_STATE の存在/budget、3 hook の event/matcher/command wiring、importability、git status を検査し、設定は変更しません。
+`doctor` は Python、resolved project root、WORKING_STATE の存在/budget、3 hook の event/matcher/command wiring、importability、git status、runtime artifactのGit ignore safetyを検査し、設定は変更しません。
 
 ## 日常運用
 
-基本は **semantic compaction** です。investigation完了、plan確定、root cause判明、major implementation完了、verification移行などの境界で、まず `WORKING_STATE.md` を更新してから `/compact` を実行します。auto-compaction は safety net として扱います。v0.1.1 は特定の token threshold に依存しません。
+基本は **semantic compaction** です。investigation完了、plan確定、root cause判明、major implementation完了、verification移行などの境界で、まず `WORKING_STATE.md` を更新してから `/compact` を実行します。auto-compaction は safety net として扱います。v0.1.2 は特定の token threshold に依存しません。
 
 Claude Code または Context Guard を更新した後は、[live smoke runbook](docs/live-smoke.md) を1回通してから日常利用へ戻します。
 
@@ -120,13 +137,13 @@ Claude Code または Context Guard を更新した後は、[live smoke runbook]
                 └── ...
 ```
 
-top-level checkpoint/summary は最新 view、`compactions/<sequence>/` は benchmark と事後検証用の履歴です。すべて `.gitignore` 対象で、自動 commit しません。
+top-level checkpoint/summary は最新 view、`compactions/<sequence>/` は benchmark と事後検証用の履歴です。target Git projectでは `doctor` がこれらのignore状態を検証します。自動commitはしません。
 
 ## Privacy / sensitive data
 
 Context Guard 自身は transcript 本文を開かず、secret/token/password を探索・抽出しません。ただし、**secret redaction 機能もありません**。
 
-`WORKING_STATE.md` snapshot と Claude Code の native `compact_summary` はローカルへ verbatim 保存されるため、その中に機密情報が含まれていれば runtime artifact に残ります。credential を `WORKING_STATE.md` に書かず、`.claude/context-guard/` は local sensitive runtime data として扱ってください。
+`WORKING_STATE.md` snapshot と Claude Code の native `compact_summary` はローカルへ verbatim 保存されるため、その中に機密情報が含まれていれば runtime artifact に残ります。credential を `WORKING_STATE.md` に書かず、`.claude/context-guard/` は local sensitive runtime data として扱ってください。Git projectでは必ず`doctor`の`Runtime gitignore: ok`を確認してください。
 
 ## テスト
 
@@ -142,14 +159,15 @@ fixture/CLI smoke と real lifecycle smoke を区別します。unit/CI は hook
 
 ## Uninstall
 
-1. 対象 project の `.claude/settings.json` / `.claude/settings.local.json` から3 hookを削除
+1. target project の `.claude/settings.json` / `.claude/settings.local.json` から3 hookを削除
 2. runtime state が不要なら `.claude/context-guard/WORKING_STATE.md` と `sessions/` を削除
 3. `CLAUDE.md` から Context Guard 用 instruction を削除
+4. 不要ならtarget projectへ追加した`.gitignore` rulesを削除
 
 Context Guard は global settings を自動変更しません。
 
 ## 現在の位置づけ
 
-v0.1.1 は **operational baseline** です。外部 memory の有効性を証明したものではありません。次は [docs/benchmark-plan.md](docs/benchmark-plan.md) に従って native compaction、state-only、full guard を ablation し、改善が測定できた機能だけを追加します。
+v0.1.2 は **operational baseline** です。外部 memory の有効性を証明したものではありません。次は [docs/benchmark-plan.md](docs/benchmark-plan.md) に従って native compaction、state-only、full guard を ablation し、改善が測定できた機能だけを追加します。
 
 FTS/BM25、embeddings、vector DB、knowledge graph、automatic LLM handoff はまだ default architecture に入れません。

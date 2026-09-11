@@ -153,6 +153,15 @@ def _doctor() -> int:
     else:
         print("Git status: not a git repository (not applicable)")
 
+    ignore_ok, ignore_problems = git_state.context_guard_git_safety(project_root)
+    if ignore_ok is None:
+        print("Runtime gitignore: not applicable (non-git project)")
+    elif ignore_ok:
+        print("Runtime gitignore: ok")
+    else:
+        print(f"Runtime gitignore: unsafe ({'; '.join(ignore_problems)})")
+        problems = True
+
     return 1 if problems else 0
 
 
