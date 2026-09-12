@@ -125,6 +125,25 @@ class TestDecisionRules(unittest.TestCase):
         self.assertEqual(result["decision"], "GO_EXTERNAL_VALIDATION")
 
 
+class TestExclusionDoesNotDisturbBlockPairing(unittest.TestCase):
+    def test_excluded_run_does_not_occupy_its_block_slot(self):
+        # The replacement fills the slot. If the excluded run closed the block,
+        # the replacement would be paired with the next block's other arm and
+        # the directional count would be computed against the wrong partner.
+        entries = [
+            ("C", 1.0, True), ("B", 0.0, True),          # block 1
+            ("C", 0.0, False), ("C", 1.0, True), ("B", 0.0, True),  # block 2 with a replaced C
+            ("C", 1.0, True), ("B", 0.0, True),          # block 3
+            ("A", 0.0, True), ("D", 0.0, True),
+            ("B", 0.0, True), ("C", 1.0, True),          # block 4
+            ("B", 0.0, True), ("C", 1.0, True),          # block 5
+        ]
+        result = aggregate_pilot.decide(pilot(entries))
+        self.assertEqual(result["primary"]["matched_blocks_used"], 5)
+        self.assertEqual(result["primary"]["blocks_favouring_C"], 5)
+        self.assertEqual(result["decision"], "GO_EXTERNAL_VALIDATION")
+
+
 class TestGuards(unittest.TestCase):
     def test_halted_pilot_reports_the_hard_blocker(self):
         data = balanced([0.0] * 5, [1.0] * 5)

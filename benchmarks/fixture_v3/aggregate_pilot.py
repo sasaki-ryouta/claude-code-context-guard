@@ -52,8 +52,12 @@ def _matched_blocks(pilot: dict[str, Any]) -> list[tuple[Fraction | None, Fracti
             continue
         record = entry["record"]
         valid = record.get("aborted_reason") is None and record.get("long_distance_valid") is True
-        score = Fraction(record["survival_score"]).limit_denominator(6) if valid and record.get("survival_score") is not None else None
-        pending[arm] = score
+        if not valid or record.get("survival_score") is None:
+            # An excluded run does not occupy its block slot; its mandatory
+            # replacement fills the slot instead. Letting it close the block
+            # would pair the replacement with the next block's other arm.
+            continue
+        pending[arm] = Fraction(record["survival_score"]).limit_denominator(6)
         if "B" in pending and "C" in pending:
             pairs.append((pending.pop("B"), pending.pop("C")))
     return pairs
