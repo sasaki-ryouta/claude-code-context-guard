@@ -24,7 +24,18 @@ This fixture measures the state-transfer mechanism. Task-outcome sensitivity is 
 - model: `claude-sonnet-5`
 - compact boundary: immediately after scripted turn 14
 - auto compaction: disabled with `DISABLE_AUTO_COMPACT=1`
+- native Auto Memory: disabled with `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` in every arm, so the
+  per-repository memory channel cannot confound the state/rehydration comparison
+  (see [[research-positioning]] 4.1); the control is recorded per run as `auto_memory_control`
 - auto updater: disabled with `DISABLE_AUTOUPDATER=1`
+- host configuration: excluded with `--setting-sources project` on every invocation, so user
+  settings cannot load plugins, hooks, skills, or MCP servers into a benchmark session.
+  The pre-control diagnostic run showed a host plugin `SessionStart` hook injecting the
+  **previous arm's** session summary into the next arm's first turn (A to B to C to D), which is a
+  direct cross-arm leak. `--bare` would also isolate but changes the authentication path, so it
+  is not used mid-series. Each run records `setting_sources_control`, the observed
+  `host_surface_observed` (plugins/skills/MCP counts from `system/init`), and any
+  `unexpected_hooks`; a run is invalid unless the surface is empty and no foreign hook ran
 - network: unnecessary / not allowed by work-tool policy
 
 Any version or model drift aborts the run.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import ast
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,6 +15,213 @@ from benchmarks.fixture_v3.score_markers import load_markers
 FIXTURE = REPO_ROOT / "benchmarks" / "fixture_v3"
 MANIFEST = json.loads((FIXTURE / "manifest.json").read_text(encoding="utf-8"))
 PROMPTS = json.loads((FIXTURE / "prompts.json").read_text(encoding="utf-8"))
+
+
+class TestHostConfigurationIsolation(unittest.TestCase):
+    """Host user settings load plugins/hooks that inject foreign context.
+
+    Observed in the pre-control diagnostic run: a host SessionStart plugin hook
+    injected the *previous arm's* session summary into the next arm's very first
+    turn (A -> B -> C -> D). That is a direct cross-arm leak and destroys the
+    causal comparison, so isolation is a validity requirement, not hygiene.
+    """
+
+    def _argv(self, settings_json=None):
+        return run_arm.claude_argv(
+            "p", "claude-sonnet-5", settings_json=settings_json
+        )
+
+    def test_every_invocation_restricts_setting_sources(self):
+        argv = self._argv()
+        self.assertIn("--setting-sources", argv)
+        self.assertEqual(argv[argv.index("--setting-sources") + 1], "project")
+
+    def test_restriction_applies_to_hook_arms_too(self):
+        argv = self._argv(settings_json='{"hooks":{}}')
+        self.assertIn("--setting-sources", argv)
+        self.assertIn("--settings", argv)
+
+    def test_bare_mode_is_not_used(self):
+        # --bare would change the authentication path mid-series.
+        self.assertNotIn("--bare", self._argv())
+
+    def test_provenance_records_the_isolation_control(self):
+        record = run_arm.new_run_record("A", scored=False)
+        self.assertEqual(record["setting_sources_control"], "project")
+        for field in ("host_surface_observed", "unexpected_hooks"):
+            self.assertIn(field, record)
+
+    def test_host_surface_is_extracted_from_init(self):
+        init = {
+            "type": "system",
+            "subtype": "init",
+            "plugins": [{"name": "x"}],
+            "skills": ["a", "b"],
+            "mcp_servers": [{"name": "m"}],
+        }
+        surface = run_arm.host_surface([init])
+        self.assertEqual(surface, {"plugins": 1, "skills": 2, "mcp_servers": 1})
+
+    def test_foreign_hooks_are_collected(self):
+        events = [
+            {"type": "system", "subtype": "hook_started", "hook_name": "SessionStart:startup"},
+            {"type": "system", "subtype": "hook_started", "hook_name": "PreCompact:manual"},
+        ]
+        self.assertEqual(
+            run_arm.foreign_hooks(events, arm="A"), ["SessionStart:startup", "PreCompact:manual"]
+        )
+        # Context Guard's own hooks are expected in the hook arms.
+        self.assertEqual(run_arm.foreign_hooks(events, arm="C"), [])
+
+
+class TestValidityRejectsUncontrolledRuns(unittest.TestCase):
+    def _valid_record(self) -> dict:
+        return {
+            "arm": "A",
+            "substantive_turns_after_state": list(range(3, 15)),
+            "marker_bearing_reads_in_final_8": [{"turn": n, "reads": []} for n in range(7, 15)],
+            "marker_echoes_in_final_8": [{"turn": n, "markers": []} for n in range(7, 15)],
+            "pre_boundary_compact_boundaries": [],
+            "compact_boundary_events": [{}],
+            "initial_tool_uses": 0,
+            "state_manipulation_valid": True,
+            "target_settings_present": False,
+            "auto_memory_control": "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1",
+            "setting_sources_control": "project",
+            "host_surface_observed": {"plugins": 0, "skills": 0, "mcp_servers": 0},
+            "unexpected_hooks": [],
+        }
+
+    def test_baseline_record_is_valid(self):
+        self.assertTrue(run_arm._validity(self._valid_record()))
+
+    def test_record_without_the_auto_memory_control_is_rejected(self):
+        # Historical runs predate the control and must not machine-validate.
+        record = self._valid_record()
+        del record["auto_memory_control"]
+        self.assertFalse(run_arm._validity(record))
+
+    def test_explicitly_disabled_control_is_rejected(self):
+        record = self._valid_record()
+        record["auto_memory_control"] = "CLAUDE_CODE_DISABLE_AUTO_MEMORY=0"
+        self.assertFalse(run_arm._validity(record))
+
+    def test_record_without_setting_source_isolation_is_rejected(self):
+        record = self._valid_record()
+        record["setting_sources_control"] = None
+        self.assertFalse(run_arm._validity(record))
+
+    def test_observed_host_surface_invalidates_the_run(self):
+        for key in ("plugins", "skills", "mcp_servers"):
+            with self.subTest(surface=key):
+                record = self._valid_record()
+                record["host_surface_observed"] = {**record["host_surface_observed"], key: 1}
+                self.assertFalse(run_arm._validity(record))
+
+    def test_foreign_hook_execution_invalidates_the_run(self):
+        record = self._valid_record()
+        record["unexpected_hooks"] = ["SessionStart:startup"]
+        self.assertFalse(run_arm._validity(record))
+
+    def test_historical_pre_control_records_do_not_validate(self):
+        import glob
+
+        runs = sorted(glob.glob(str(REPO_ROOT / "benchmarks" / "runs" / "*" / "*" / "run.json")))
+        checked = 0
+        for path in runs:
+            record = json.loads(Path(path).read_text(encoding="utf-8"))
+            if record.get("auto_memory_control"):
+                continue
+            checked += 1
+            self.assertFalse(
+                run_arm._validity(record), f"uncontrolled run machine-validated: {path}"
+            )
+        if checked == 0:
+            self.skipTest("no uncontrolled historical runs present")
+
+
+class TestNativeMemoryContamination(unittest.TestCase):
+    """Auto Memory is a second persistent-memory channel and would confound H1."""
+
+    def _env(self) -> dict:
+        with tempfile.TemporaryDirectory() as tmp:
+            return run_arm.benchmark_env(Path(tmp))
+
+    def test_native_auto_memory_is_disabled(self):
+        self.assertEqual(self._env()["CLAUDE_CODE_DISABLE_AUTO_MEMORY"], "1")
+
+    def test_existing_controls_are_retained(self):
+        env = self._env()
+        self.assertEqual(env["DISABLE_AUTO_COMPACT"], "1")
+        self.assertEqual(env["DISABLE_AUTOUPDATER"], "1")
+
+    def test_undocumented_window_control_is_removed(self):
+        # v2 relied on an undocumented key; v3 must not inherit it from the host.
+        import os
+
+        original = os.environ.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW")
+        os.environ["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = "1000000"
+        try:
+            self.assertNotIn("CLAUDE_CODE_AUTO_COMPACT_WINDOW", self._env())
+        finally:
+            if original is None:
+                os.environ.pop("CLAUDE_CODE_AUTO_COMPACT_WINDOW", None)
+            else:
+                os.environ["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = original
+
+    def test_host_cannot_re_enable_auto_memory(self):
+        import os
+
+        original = os.environ.get("CLAUDE_CODE_DISABLE_AUTO_MEMORY")
+        os.environ["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "0"
+        try:
+            self.assertEqual(self._env()["CLAUDE_CODE_DISABLE_AUTO_MEMORY"], "1")
+        finally:
+            if original is None:
+                os.environ.pop("CLAUDE_CODE_DISABLE_AUTO_MEMORY", None)
+            else:
+                os.environ["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = original
+
+    def test_every_claude_invocation_receives_the_controlled_environment(self):
+        # The control is only real if no invocation builds its own environment.
+        source = (
+            Path(run_arm.__file__).read_text(encoding="utf-8")
+        )
+        tree = ast.parse(source)
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "_run_claude"
+        ]
+        self.assertGreaterEqual(len(calls), 4, "expected the scripted turns, compact, and probes")
+        for call in calls:
+            env_arg = call.args[2] if len(call.args) >= 3 else None
+            self.assertIsInstance(env_arg, ast.Name, ast.unparse(call))
+            self.assertEqual(env_arg.id, "env", ast.unparse(call))
+
+    def test_provenance_records_the_control(self):
+        record = run_arm.new_run_record("C", scored=False)
+        self.assertIn("auto_memory_control", record)
+        self.assertEqual(record["auto_memory_control"], "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1")
+
+    def test_provenance_records_host_configuration_surface(self):
+        # Without --bare, claude -p can still discover host configuration;
+        # record enough to spot drift between runs.
+        provenance = run_arm.host_config_provenance()
+        self.assertIsInstance(provenance, dict)
+        for key in ("user_settings", "user_memory", "user_claude_json"):
+            self.assertIn(key, provenance)
+            entry = provenance[key]
+            self.assertIn("present", entry)
+            if entry["present"]:
+                self.assertRegex(entry["sha256"], r"^[0-9a-f]{64}$")
+
+    def test_host_provenance_never_stores_configuration_contents(self):
+        blob = json.dumps(run_arm.host_config_provenance())
+        for leak in ("apiKey", "token", "oauth", "-----BEGIN"):
+            self.assertNotIn(leak, blob)
 
 
 class TestFixtureV3Determinism(unittest.TestCase):
@@ -132,6 +340,8 @@ class TestFixtureV3Validity(unittest.TestCase):
                 "initial_tool_uses": 0,
                 "state_manipulation_valid": True,
                 "target_settings_present": False,
+                "host_surface_observed": {"plugins": 0, "skills": 0, "mcp_servers": 0},
+                "unexpected_hooks": [],
             }
         )
         self.assertTrue(run_arm._validity(record))
@@ -152,6 +362,8 @@ class TestFixtureV3Validity(unittest.TestCase):
                 "target_settings_present": False,
                 "hook_errors": 0,
                 "rehydrate_context_chars": 5000,
+                "host_surface_observed": {"plugins": 0, "skills": 0, "mcp_servers": 0},
+                "unexpected_hooks": [],
             }
         )
         self.assertTrue(run_arm._validity(record))

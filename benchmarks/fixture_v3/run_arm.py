@@ -31,6 +31,67 @@ STATE_RECORDED_TURN = 2
 FINAL_PRE_COMPACT_TURNS = 8
 DISABLE_AUTO_COMPACT = "1"
 DISABLE_AUTOUPDATER = "1"
+# Claude Code Auto Memory is on by default and loads per-repository memory at
+# session start. That is a second persistent-memory channel and would confound
+# a memory experiment, so every arm disables it.
+DISABLE_AUTO_MEMORY = "1"
+# Host user settings load plugins, hooks, skills and MCP servers into every
+# `claude -p`. In the pre-control diagnostic run a host SessionStart plugin hook
+# injected the PREVIOUS arm's session summary into the next arm's first turn, so
+# restricting setting sources is a validity control, not hygiene. "project" is a
+# documented --setting-sources value and, unlike --bare, leaves auth untouched.
+SETTING_SOURCES = "project"
+# Hooks the fixture itself installs through inline --settings for C/D.
+EXPECTED_HOOK_PREFIXES = ("PreCompact", "PostCompact", "SessionStart")
+
+
+def benchmark_env(target: Path, base: dict[str, str] | None = None) -> dict[str, str]:
+    """The environment shared by every Claude invocation in a run.
+
+    Built in one place so no invocation can quietly run without the controls;
+    a test asserts that each `_run_claude` call is handed this same mapping.
+    """
+    env = dict(os.environ if base is None else base)
+    env.pop("CLAUDE_CODE_AUTO_COMPACT_WINDOW", None)
+    env.update(
+        {
+            "DISABLE_AUTO_COMPACT": DISABLE_AUTO_COMPACT,
+            "DISABLE_AUTOUPDATER": DISABLE_AUTOUPDATER,
+            "CLAUDE_CODE_DISABLE_AUTO_MEMORY": DISABLE_AUTO_MEMORY,
+            "CLAUDE_PROJECT_DIR": str(target),
+        }
+    )
+    return env
+
+
+def host_config_provenance() -> dict[str, Any]:
+    """Identify host configuration that `claude -p` can still discover.
+
+    Without --bare, working-directory and ~/.claude configuration remain
+    visible. Record presence, size, and digest only - never the contents,
+    which can hold credentials.
+    """
+    home = Path.home() / ".claude"
+    candidates = {
+        "user_settings": home / "settings.json",
+        "user_memory": home / "CLAUDE.md",
+        "user_claude_json": Path.home() / ".claude.json",
+    }
+    provenance: dict[str, Any] = {}
+    for name, path in candidates.items():
+        try:
+            if path.is_file():
+                data = path.read_bytes()
+                provenance[name] = {
+                    "present": True,
+                    "bytes": len(data),
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                }
+            else:
+                provenance[name] = {"present": False, "bytes": None, "sha256": None}
+        except OSError:
+            provenance[name] = {"present": None, "bytes": None, "sha256": None}
+    return provenance
 ARMS = core.ARMS
 WORK_ALLOWED_TOOLS = core.WORK_ALLOWED_TOOLS
 PROBE_DISALLOWED_TOOLS = core.PROBE_DISALLOWED_TOOLS
@@ -112,9 +173,44 @@ def claude_argv(
         allowed=allowed,
         disallowed=disallowed,
     )
+    argv.extend(["--setting-sources", SETTING_SOURCES])
     if settings_json is not None:
         argv.extend(["--settings", settings_json])
     return argv
+
+
+def host_surface(events: list[dict]) -> dict[str, int]:
+    """Plugins/skills/MCP servers the session actually loaded, from system/init."""
+    surface = {"plugins": 0, "skills": 0, "mcp_servers": 0}
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "system" and event.get("subtype") == "init":
+            for key in surface:
+                value = event.get(key)
+                surface[key] = len(value) if isinstance(value, list) else 0
+            break
+    return surface
+
+
+def foreign_hooks(events: list[dict], *, arm: str) -> list[str]:
+    """Hook executions that this fixture did not install.
+
+    Arms A and B install no hooks, so any execution is foreign. Arms C and D
+    install the three Context Guard hooks, so only other names are foreign.
+    """
+    expected = EXPECTED_HOOK_PREFIXES if core.arm_config(arm)["hooks"] else ()
+    names: list[str] = []
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "system" and event.get("subtype") == "hook_started":
+            name = event.get("hook_name")
+            if not isinstance(name, str):
+                continue
+            if not name.startswith(expected) if expected else True:
+                names.append(name)
+    return names
 
 
 def compact_boundaries(events: list[dict]) -> list[dict[str, Any]]:
@@ -242,6 +338,11 @@ def new_run_record(arm: str, *, scored: bool) -> dict[str, Any]:
             "fixture_source_dirty": None,
             "auto_compaction_control": "DISABLE_AUTO_COMPACT=1",
             "auto_updater_control": "DISABLE_AUTOUPDATER=1",
+            "auto_memory_control": "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1",
+            "setting_sources_control": SETTING_SOURCES,
+            "host_surface_observed": None,
+            "unexpected_hooks": [],
+            "host_config": None,
             "hook_settings_delivery": "inline --settings" if core.arm_config(arm)["hooks"] else None,
             "target_settings_present": None,
             "pre_boundary_compact_boundaries": [],
@@ -277,8 +378,19 @@ def _validity(record: dict[str, Any]) -> bool:
             and isinstance(context_chars, int)
             and context_chars <= 9000
         )
+    surface = record.get("host_surface_observed")
+    surface_clean = isinstance(surface, dict) and all(
+        surface.get(key) == 0 for key in ("plugins", "skills", "mcp_servers")
+    )
+    controls_ok = (
+        record.get("auto_memory_control") == "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1"
+        and record.get("setting_sources_control") == SETTING_SOURCES
+        and surface_clean
+        and not record.get("unexpected_hooks")
+    )
     return (
-        len(substantive) >= 12
+        controls_ok
+        and len(substantive) >= 12
         and not any(item.get("reads") for item in reads if isinstance(item, dict))
         and not any(item.get("markers") for item in echoes if isinstance(item, dict))
         and not record.get("pre_boundary_compact_boundaries")
@@ -369,15 +481,8 @@ def run_one_arm(
             raise ValueError("target unexpectedly contains .claude/settings.json")
 
         settings_json = hook_settings_json(arm, context_guard_root)
-        env = dict(os.environ)
-        env.pop("CLAUDE_CODE_AUTO_COMPACT_WINDOW", None)
-        env.update(
-            {
-                "DISABLE_AUTO_COMPACT": DISABLE_AUTO_COMPACT,
-                "DISABLE_AUTOUPDATER": DISABLE_AUTOUPDATER,
-                "CLAUDE_PROJECT_DIR": str(target),
-            }
-        )
+        env = benchmark_env(target)
+        record["host_config"] = host_config_provenance()
 
         model_id = manifest.get("model_id")
         if not isinstance(model_id, str) or not model_id:
@@ -408,6 +513,7 @@ def run_one_arm(
             analysis = core.analyze_turn(events)
             analysis["marker_bearing_reads"] = probe_material_reads(events)
             record["turn_analyses"].append({"turn": turn_number, **analysis})
+            record["unexpected_hooks"].extend(foreign_hooks(events, arm=arm))
             boundaries = compact_boundaries(events)
             if boundaries:
                 record["pre_boundary_compact_boundaries"].extend(
@@ -425,6 +531,7 @@ def run_one_arm(
 
             if turn_number == INITIAL_TURN:
                 record["initial_tool_uses"] = analysis["tool_uses"]
+                record["host_surface_observed"] = host_surface(events)
                 init = core._first_init(events)
                 observed_model = init.get("model") if init else None
                 record["model_id_observed"] = observed_model
@@ -471,6 +578,7 @@ def run_one_arm(
                 env,
             )
             (run_dir / "compact.jsonl").write_text(compact_raw, encoding="utf-8")
+            record["unexpected_hooks"].extend(foreign_hooks(compact_events, arm=arm))
             record["compaction_observed"] = {
                 "scripted_compact_succeeded": None if compact_code is None else compact_code == 0,
                 "pre_compact_events": None,
@@ -492,6 +600,7 @@ def run_one_arm(
                     env,
                 )
                 (run_dir / "probe.jsonl").write_text(probe_raw, encoding="utf-8")
+                record["unexpected_hooks"].extend(foreign_hooks(probe_events, arm=arm))
                 score = score_text(core._event_text(probe_events), markers)
                 record["survival_markers"] = score["markers"]
                 record["survival_score"] = score["score"]
@@ -512,6 +621,7 @@ def run_one_arm(
                         env,
                     )
                     (run_dir / "semantic-probe.jsonl").write_text(semantic_raw, encoding="utf-8")
+                    record["unexpected_hooks"].extend(foreign_hooks(semantic_events, arm=arm))
                     record["semantic_probe"] = score_semantic(core._event_text(semantic_events))
                     if semantic_timeout:
                         record["aborted_reason"] = semantic_timeout
