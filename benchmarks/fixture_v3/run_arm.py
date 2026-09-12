@@ -41,6 +41,13 @@ DISABLE_AUTO_MEMORY = "1"
 # restricting setting sources is a validity control, not hygiene. "project" is a
 # documented --setting-sources value and, unlike --bare, leaves auth untouched.
 SETTING_SOURCES = "project"
+# `.claude/` is a built-in sensitive path. With host settings excluded the
+# model's WORKING_STATE write is denied, which silently removes the behaviour
+# arms B/C exist to test. "auto" restores the same permission posture the host
+# previously supplied via defaultMode, but declares it explicitly so the run no
+# longer depends on host configuration. It is applied identically to every arm,
+# and is deliberately not bypassPermissions.
+PERMISSION_MODE = "auto"
 # Hooks the fixture itself installs through inline --settings for C/D.
 EXPECTED_HOOK_PREFIXES = ("PreCompact", "PostCompact", "SessionStart")
 
@@ -173,7 +180,7 @@ def claude_argv(
         allowed=allowed,
         disallowed=disallowed,
     )
-    argv.extend(["--setting-sources", SETTING_SOURCES])
+    argv.extend(["--setting-sources", SETTING_SOURCES, "--permission-mode", PERMISSION_MODE])
     if settings_json is not None:
         argv.extend(["--settings", settings_json])
     return argv
@@ -340,6 +347,7 @@ def new_run_record(arm: str, *, scored: bool) -> dict[str, Any]:
             "auto_updater_control": "DISABLE_AUTOUPDATER=1",
             "auto_memory_control": "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1",
             "setting_sources_control": SETTING_SOURCES,
+            "permission_mode_control": PERMISSION_MODE,
             "host_surface_observed": None,
             "unexpected_hooks": [],
             "host_config": None,
@@ -379,8 +387,10 @@ def _validity(record: dict[str, Any]) -> bool:
             and context_chars <= 9000
         )
     surface = record.get("host_surface_observed")
+    # Claude Code's own bundled skills load in every arm; only host-supplied
+    # plugins and MCP servers indicate that user settings leaked in.
     surface_clean = isinstance(surface, dict) and all(
-        surface.get(key) == 0 for key in ("plugins", "skills", "mcp_servers")
+        surface.get(key) == 0 for key in ("plugins", "mcp_servers")
     )
     controls_ok = (
         record.get("auto_memory_control") == "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1"

@@ -74,6 +74,39 @@ class TestHostConfigurationIsolation(unittest.TestCase):
         self.assertEqual(run_arm.foreign_hooks(events, arm="C"), [])
 
 
+class TestStateWritabilityUnderIsolation(unittest.TestCase):
+    """Isolation must not remove the treatment it is supposed to measure.
+
+    `.claude/` is a built-in sensitive path: with host settings excluded, the
+    model's WORKING_STATE write is denied and arms B/C silently lose the very
+    behaviour under test. The first isolated run failed its manipulation check
+    for exactly this reason - every canary absent, state file present but never
+    filled in.
+    """
+
+    def test_every_invocation_sets_an_explicit_permission_mode(self):
+        argv = run_arm.claude_argv("p", "claude-sonnet-5", settings_json=None)
+        self.assertIn("--permission-mode", argv)
+        self.assertEqual(argv[argv.index("--permission-mode") + 1], run_arm.PERMISSION_MODE)
+
+    def test_permission_mode_is_identical_for_every_arm(self):
+        # A difference here would be a treatment difference, not a control.
+        modes = set()
+        for settings in (None, '{"hooks":{}}'):
+            argv = run_arm.claude_argv("p", "claude-sonnet-5", settings_json=settings)
+            modes.add(argv[argv.index("--permission-mode") + 1])
+        self.assertEqual(len(modes), 1)
+
+    def test_permission_mode_is_not_a_blanket_bypass(self):
+        self.assertNotEqual(run_arm.PERMISSION_MODE, "bypassPermissions")
+
+    def test_provenance_records_the_permission_mode(self):
+        self.assertEqual(
+            run_arm.new_run_record("B", scored=False)["permission_mode_control"],
+            run_arm.PERMISSION_MODE,
+        )
+
+
 class TestValidityRejectsUncontrolledRuns(unittest.TestCase):
     def _valid_record(self) -> dict:
         return {
@@ -111,8 +144,15 @@ class TestValidityRejectsUncontrolledRuns(unittest.TestCase):
         record["setting_sources_control"] = None
         self.assertFalse(run_arm._validity(record))
 
+    def test_bundled_skills_do_not_invalidate_a_run(self):
+        # Claude Code ships its own skills; they load identically in every arm
+        # and are not a host-configuration leak.
+        record = self._valid_record()
+        record["host_surface_observed"] = {"plugins": 0, "skills": 20, "mcp_servers": 0}
+        self.assertTrue(run_arm._validity(record))
+
     def test_observed_host_surface_invalidates_the_run(self):
-        for key in ("plugins", "skills", "mcp_servers"):
+        for key in ("plugins", "mcp_servers"):
             with self.subTest(surface=key):
                 record = self._valid_record()
                 record["host_surface_observed"] = {**record["host_surface_observed"], key: 1}
