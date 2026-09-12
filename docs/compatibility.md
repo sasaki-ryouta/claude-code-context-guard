@@ -1,8 +1,8 @@
 ---
 title: Claude Code compatibility
-date: 2026-09-11
+date: 2026-09-12
 tags: [compatibility, hooks, claude-code]
-status: verified
+status: live-verified
 type: reference
 ---
 
@@ -16,6 +16,7 @@ type: reference
    hook payload を生成している実コードを直接確認
 2. 現行公式ドキュメント <https://code.claude.com/docs/en/hooks>
 3. 現行公式ドキュメント <https://code.claude.com/docs/en/settings>
+4. macOS / Darwin arm64 上の実 Claude Code 2.1.245 process で `/compact` lifecycle を実行
 
 > [!note]
 > ローカルビルドと公式ドキュメントが一致した項目は [[architecture]] / [[operations]] で前提として扱う。
@@ -136,3 +137,40 @@ hook_event_name:"SessionStart",source:t,agent_type:o,model:s,session_title:...
   これは **transcript ファイル読み込みの最適化**（PreCompact 境界以降のみ読む）に関するもので、
   PreCompact **hook の実行**をスキップするものではない。
   v0.1 は transcript を読まないため影響しない。
+
+## 4. Live lifecycle verification — 2026-09-12
+
+Issue #7 の runbook を、Claude Code **2.1.245** / Python **3.13.2** / macOS Darwin **25.6.0 arm64** / Context Guard commit `fcb45fcde35b9ef3e9d81f1a4197f21defe5940f` で実行した。
+
+### 実測 lifecycle order
+
+2本の独立した実 Claude Code process で `/compact` を実行し、両方で以下の順序を観測した。
+
+```text
+PreCompact -> SessionStart(source=compact) -> PostCompact
+```
+
+これは重要な互換性事実である。Context Guard は PostCompact summary を rehydration に使わないため、この順序でも正しく動作する。将来の Claude Code versionで順序が変わる可能性はあるため、実装はこの順序に依存してはならない。
+
+### Rehydration survival
+
+compaction 直後に file/tool access を禁止した状態で、rehydrated context のみから以下3 markerを再現できた。
+
+- `LIVE-SMOKE-GOAL`
+- `LIVE-SMOKE-DECISION`
+- `LIVE-SMOKE-NEXT`
+
+両runとも `rehydrate.context_chars == 1058` で、9,000-character hard cap内。`hook_error` は0件、per-compaction archiveとeventの `compaction_sequence` は一致した。
+
+### `cwd` の実挙動
+
+Claude Code 2.1.245 では、session内で Bash tool を使って nested directoryへ `cd` しても、hook payloadの `cwd` は project root のままだった。そのため live lifecycle testだけでは「nested payload cwd」を作れない。
+
+また nested directoryからClaude Code process自体を起動すると、Claude Codeはそのdirectoryを別projectとして扱い、parent repositoryの `.claude/settings.json` を読み込まない。この挙動は Context Guard の root-resolution failure ではない。
+
+したがって nested-cwd root-resolution invariant は次の2層で検証する。
+
+1. live smoke: repository rootから起動した実 lifecycleでstateがrootに留まること
+2. deterministic handler/unit test: hook payload `cwd=<repo>/nested` を直接与え、Git root / `CLAUDE_PROJECT_DIR` fallbackがrootを返すこと
+
+この分離により、Claude Code側がpayload `cwd` を将来変更しても Context Guard のroot-resolution contractを独立して検証できる。
