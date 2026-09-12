@@ -1,11 +1,11 @@
 {
-  "fixture": "v1",
+  "fixture": "v2",
   "markers": {
-    "goal": "CGV1-GOAL-7F3A",
-    "criterion": "CGV1-CRITERION-B8D2",
-    "decision": "CGV1-DECISION-2C91",
-    "failure": "CGV1-FAILURE-6E44",
-    "next": "CGV1-NEXT-4D88",
-    "rejected": "CGV1-REJECTED-91AF"
+    "goal": "CGV2-GOAL-A13C",
+    "criterion": "CGV2-ORDER-6D2F",
+    "decision": "CGV2-BOUNDARY-91B7",
+    "identifier_case": "CGV2-IDCASE-3E8A",
+    "output_schema": "CGV2-SCHEMA-C4D1",
+    "rejected": "CGV2-REJECTED-75F0"
   }
 }
