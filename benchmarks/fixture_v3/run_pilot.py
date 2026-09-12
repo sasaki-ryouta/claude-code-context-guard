@@ -70,18 +70,26 @@ def run_pilot(output_root: Path) -> dict[str, Any]:
             if replacements_used >= MAX_REPLACEMENTS:
                 halted = "HARD_BLOCKER: too many invalid runs"
                 break
-            replacements_used += 1
-            replacement = run_arm.run_one_arm(
-                arm,
-                output_root=output_root,
-                scored=True,
-                keep_target=False,
-                run_timestamp=datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
-            )
-            runs.append(
-                {"position": position, "arm": arm, "replacement_for": position, "record": replacement}
-            )
-            if not is_valid(replacement) and replacements_used >= MAX_REPLACEMENTS:
+            # Keep replacing while the budget allows: an invalid replacement is
+            # itself an exclusion and consumes the next retry immediately,
+            # rather than deferring it to a later scheduled position.
+            replaced_ok = False
+            while replacements_used < MAX_REPLACEMENTS:
+                replacements_used += 1
+                replacement = run_arm.run_one_arm(
+                    arm,
+                    output_root=output_root,
+                    scored=True,
+                    keep_target=False,
+                    run_timestamp=datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
+                )
+                runs.append(
+                    {"position": position, "arm": arm, "replacement_for": position, "record": replacement}
+                )
+                if is_valid(replacement):
+                    replaced_ok = True
+                    break
+            if not replaced_ok:
                 halted = "HARD_BLOCKER: too many invalid runs"
                 break
 
