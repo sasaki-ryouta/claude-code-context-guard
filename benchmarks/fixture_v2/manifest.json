@@ -1,0 +1,13 @@
+{
+  "fixture": "v1",
+  "status": "pre-pilot",
+  "claude_code_version": "2.1.245",
+  "model_id": "claude-sonnet-5",
+  "fixed_compact_boundary": "after_turn_14",
+  "target_initial_tree": "55b925e7d8dbe9dac1dfc72210a0337bdbcdaa19",
+  "target_initial_commit": "629c417ab854b5ac642b2d272eac1404ed8408b1",
+  "commit_message": "benchmark fixture v1 seed",
+  "commit_timestamp": "2000-01-01T00:00:00Z",
+  "notes": "model_id pinned 2026-09-12; runners must pass --model explicitly and assert the observed system/init model matches",
+  "model_id_source": "stream-json system/init (confirmed identical in assistant.message.model and result.modelUsage) on Claude Code 2.1.245"
+}
