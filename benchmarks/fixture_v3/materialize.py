@@ -9,7 +9,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 SEED = HERE / "seed"
-COMMIT_MESSAGE = "benchmark fixture v2 seed"
+COMMIT_MESSAGE = "benchmark fixture v3 seed"
 FIXED_DATE = "2000-01-01T00:00:00Z"
 
 
@@ -58,7 +58,7 @@ def materialize(destination: Path) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Materialize deterministic RouteForge benchmark fixture v2")
+    parser = argparse.ArgumentParser(description="Materialize deterministic RouteForge benchmark fixture v3")
     parser.add_argument("destination", type=Path)
     args = parser.parse_args()
     print(materialize(args.destination))
