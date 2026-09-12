@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -22,20 +23,31 @@ def load_fixture(name: str, **overrides) -> dict:
     return payload
 
 
-def run_cli(command: str, stdin_text: str, *, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+def run_cli(
+    command: str,
+    stdin_text: str,
+    *,
+    extra_env: dict[str, str] | None = None,
+    cwd: Path | str | None = None,
+) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env.pop("CLAUDE_PROJECT_DIR", None)
     if extra_env:
         env.update(extra_env)
     env["PYTHONPATH"] = str(SRC_DIR)
-    return subprocess.run(
-        [sys.executable, "-m", "context_guard", command],
-        input=stdin_text,
-        capture_output=True,
-        text=True,
-        env=env,
-        timeout=60,
-    )
+    # A payload without "cwd" makes the hook fall back to the process cwd.
+    # Inheriting the developer's cwd would write into this repository, so
+    # every run gets a throwaway directory unless the caller names one.
+    with tempfile.TemporaryDirectory() as scratch:
+        return subprocess.run(
+            [sys.executable, "-m", "context_guard", command],
+            input=stdin_text,
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=str(cwd) if cwd is not None else scratch,
+            timeout=60,
+        )
 
 
 def init_git_repo(path: Path) -> None:
