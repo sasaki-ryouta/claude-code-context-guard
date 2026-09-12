@@ -15,6 +15,10 @@ v0.1 は**測定のための基盤**であり、効果が証明された構成�
 > [!warning]
 > v0.1 の時点で効果の主張をしてはならない。lifecycle correctness は実機確認済みだが、efficacy はまだ測っていない。
 
+> [!note]
+> 2026-09-12 の live smoke 実測から、B vs C の fixture validity と exact-marker scoring を追加した。
+> live smoke 自体は短く（WORKING_STATE 535 chars、compaction 前会話 1 turn）、benchmark difficulty の証拠には使わない。
+
 ## 1. 答えるべき問い
 
 主問（SPEC §19）:
@@ -60,7 +64,7 @@ fixture は事前に次を満たすこと:
 
 この条件は「B を失敗させるため」の tuning ではない。native summary が high-value state を保持できる十分な距離・干渉がある状況を作り、B vs C が飽和した trivial task になることを防ぐための validity gate である。
 
-live smoke の 535-char state / 1-turn 会話 / 3-of-3 survival は lifecycle correctness の証拠であり、benchmark difficulty の証拠としては扱わない。
+live smoke の短い state / 1-turn 会話 / 3-of-3 survival は lifecycle correctness の証拠であり、benchmark difficulty の証拠としては扱わない。
 
 ## 3. task suite
 
