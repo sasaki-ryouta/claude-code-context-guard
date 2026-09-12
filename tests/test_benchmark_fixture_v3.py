@@ -165,6 +165,34 @@ class TestFinalEightDetectionIsToolAgnostic(unittest.TestCase):
         events = self._turn("SomeReader", {"target": "WORKING_STATE.md", "limit": 10})
         self.assertTrue(run_arm.probe_material_reads(events))
 
+    def test_every_marker_document_is_caught_by_bare_filename(self):
+        # Path-qualified needles missed `cd docs && cat contract.md`, whose
+        # contents carry the semantic answers even though no canary appears.
+        for filename in ("contract.md", "incident.md", "recall-tags.md", "WORKING_STATE.md"):
+            with self.subTest(filename=filename):
+                events = self._turn("Bash", {"command": f"cd docs && cat {filename}"})
+                self.assertTrue(
+                    run_arm.probe_material_reads(events), f"{filename} evaded detection"
+                )
+
+    def test_every_marker_document_is_caught_with_a_path(self):
+        for path in (
+            "docs/contract.md",
+            "docs/incident.md",
+            "docs/recall-tags.md",
+            ".claude/context-guard/WORKING_STATE.md",
+        ):
+            with self.subTest(path=path):
+                events = self._turn("Read", {"file_path": f"/tmp/target/{path}"})
+                self.assertTrue(run_arm.probe_material_reads(events), f"{path} evaded detection")
+
+    def test_marker_material_names_are_declared_in_one_place(self):
+        # A second list is how contract.md ended up covered and incident.md did not.
+        self.assertEqual(
+            sorted(run_arm.MARKER_MATERIAL_FILENAMES),
+            ["WORKING_STATE.md", "contract.md", "incident.md", "recall-tags.md"],
+        )
+
     def test_ordinary_source_access_is_not_flagged(self):
         events = self._turn("Grep", {"pattern": "normalize", "path": "src/routeforge"})
         self.assertEqual(run_arm.probe_material_reads(events), [])

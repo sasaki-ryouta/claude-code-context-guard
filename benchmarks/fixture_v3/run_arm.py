@@ -255,20 +255,25 @@ def marker_echoes(events: list[dict], markers: dict[str, str]) -> list[str]:
     return [name for name, token in markers.items() if token in blob]
 
 
+# Every document that carries canaries or the durable facts behind them.
+# Declared once: a second list is how contract.md ended up covered while
+# incident.md did not.
+MARKER_MATERIAL_FILENAMES: tuple[str, ...] = (
+    "contract.md",
+    "incident.md",
+    "recall-tags.md",
+    "WORKING_STATE.md",
+)
+
+
 def _probe_material(value: str) -> bool:
-    # Substring only. The value is usually a serialized tool input, so anchored
-    # checks such as endswith() stop matching once quotes or braces are appended
-    # - which let `cd .claude/context-guard && head WORKING_STATE.md` through.
+    # Match on bare filenames. Two earlier gaps came from qualifying the
+    # needles: an anchored endswith() missed a serialized input, and path
+    # prefixes missed `cd docs && cat contract.md`. A basename cannot be
+    # sidestepped by changing directory first, and these names are specific
+    # enough that an ordinary task reference to them is itself a reread.
     normalized = value.replace("\\", "/")
-    return any(
-        needle in normalized
-        for needle in (
-            "docs/contract.md",
-            "docs/incident.md",
-            "docs/recall-tags.md",
-            "WORKING_STATE.md",
-        )
-    )
+    return any(needle in normalized for needle in MARKER_MATERIAL_FILENAMES)
 
 
 def probe_material_reads(events: list[dict]) -> list[str]:
