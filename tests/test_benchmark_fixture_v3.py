@@ -255,6 +255,32 @@ class TestFinalEightDetectionIsToolAgnostic(unittest.TestCase):
         self.assertEqual(run_arm.marker_echoes(events, markers), [])
 
 
+class TestSemanticScorerToleratesStreamDuplication(unittest.TestCase):
+    """One printed response appears twice in the stream, not two answers."""
+
+    ANSWER = "Q1=B\nQ2=C\nQ3=A\nQ4=B\nQ5=C\nQ6=A"
+
+    def test_single_response_scores_normally(self):
+        key = run_arm.load_semantic_answers()
+        self.assertEqual(run_arm.score_semantic(self.ANSWER, key)["score"], 1.0)
+
+    def test_response_repeated_by_the_stream_still_scores(self):
+        # _event_text concatenates the assistant message and the result string,
+        # so every correct answer used to resolve to None and every arm scored
+        # 0/6 regardless of what the model said.
+        key = run_arm.load_semantic_answers()
+        doubled = self.ANSWER + "\n" + self.ANSWER
+        self.assertEqual(run_arm.score_semantic(doubled, key)["score"], 1.0)
+
+    def test_genuinely_contradictory_answers_are_still_rejected(self):
+        key = run_arm.load_semantic_answers()
+        conflicting = self.ANSWER + "\nQ1=C"
+        result = run_arm.score_semantic(conflicting, key)
+        self.assertIsNone(result["answers"]["Q1"])
+        self.assertFalse(result["correct"]["Q1"])
+        self.assertTrue(result["correct"]["Q2"])
+
+
 class TestProbeMeasuresMemoryNotRetrieval(unittest.TestCase):
     """A probe that can fetch the answer is not measuring survival.
 
@@ -573,10 +599,20 @@ class TestFixtureV3SemanticProbe(unittest.TestCase):
         self.assertEqual(result["score"], 1.0)
         self.assertTrue(all(result["correct"].values()))
 
-    def test_semantic_scorer_rejects_missing_or_duplicate_answers(self):
-        result = run_arm.score_semantic("Q1=B\nQ1=B\nQ2=C\n")
-        self.assertIsNone(result["answers"]["Q1"])
-        self.assertLess(result["score"], 1.0)
+    def test_semantic_scorer_rejects_missing_or_contradictory_answers(self):
+        # An identical repeat is the stream echoing one response, not two
+        # answers: _event_text concatenates the assistant message with the
+        # result string, so treating any repeat as ambiguous scored every arm
+        # 0/6 no matter what the model said. A contradiction is still rejected.
+        repeated = run_arm.score_semantic("Q1=B\nQ1=B\nQ2=C\n")
+        self.assertEqual(repeated["answers"]["Q1"], "B")
+        self.assertLess(repeated["score"], 1.0)  # Q3-Q6 are missing
+
+        contradictory = run_arm.score_semantic("Q1=B\nQ1=C\nQ2=C\n")
+        self.assertIsNone(contradictory["answers"]["Q1"])
+
+        missing = run_arm.score_semantic("Q2=C\n")
+        self.assertIsNone(missing["answers"]["Q1"])
 
 
 class TestFixtureV3Validity(unittest.TestCase):

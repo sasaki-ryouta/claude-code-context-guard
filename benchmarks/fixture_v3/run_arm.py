@@ -393,8 +393,11 @@ def score_semantic(text: str, answers: dict[str, str] | None = None) -> dict[str
     for question, answer in pattern.findall(text):
         if question in found:
             found[question].append(answer)
+    # The stream carries one printed response twice (assistant message plus
+    # result string), so identical repeats are one answer, not a contradiction.
+    # Genuinely conflicting answers still resolve to None.
     response = {
-        question: values[0] if len(values) == 1 else None
+        question: values[0] if values and len(set(values)) == 1 else None
         for question, values in found.items()
     }
     correct = {
