@@ -2,11 +2,17 @@
 title: Benchmark fixture v3
 date: 2026-09-12
 tags: [benchmark, fixture, compaction, v0.2]
-status: proposed
+status: frozen
 type: experiment-spec
 ---
 
 # Benchmark fixture v3 — decoupled long-distance recall
+
+> [!important]
+> **Frozen 2026-09-13 at `ca5e677`.** One unscored A/B/C/D run satisfied every validity condition
+> below and was independently confirmed against the raw stream logs. Prompts, canaries, arm
+> definitions, task difficulty, compact boundary, and scoring are now fixed. Changing any of them
+> requires a new fixture version, not an edit here.
 
 Issues: #13, #21
 
