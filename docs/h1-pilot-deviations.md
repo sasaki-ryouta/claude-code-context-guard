@@ -96,7 +96,9 @@ For completeness, these were checked and found compliant:
 - the single excluded run was replaced immediately, before the next scheduled run and before any
   aggregate, using one of the two permitted replacements;
 - the exclusion fired on the frozen validity check (final-eight marker-material reread), not on the
-  run's score — that run had scored 6/6;
+  run's score. The detector fired on a `git check-ignore` command that named the WORKING_STATE
+  path, not on a reread of its contents, and the run itself scored 0/6 — see deviation 2 for why
+  that matters;
 - every run recorded `scored: true`, the pinned model, and the pinned Claude Code version;
 - the decision rule that fired is the one the registered ordering selects;
 - the rule-ordering amendment landed before the first scored run, not during the pilot.

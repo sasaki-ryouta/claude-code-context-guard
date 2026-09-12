@@ -103,7 +103,7 @@ alongside a sensitivity check.
 | | mean(B) | mean(C) | d | rule | decision |
 |---|---|---|---|---|---|
 | as executed (excluded) | 0.80 | 1.00 | 1/5 | 4 — clears threshold, inconsistent | STOP_NO_USEFUL_INCREMENT |
-| if the excluded run were counted | 0.80 | 0.833 | 1/30 | 5 — increment too small | STOP_NO_USEFUL_INCREMENT |
+| if the excluded run were counted (6 C runs, replacement included) | 0.80 | 0.833 | 1/30 | 5 — increment too small | STOP_NO_USEFUL_INCREMENT |
 
 The decision is identical either way, by different registered rules. The exclusion changes the
 headline contrast substantially — `1/5` versus `1/30` — but not the outcome, and the sensitivity
