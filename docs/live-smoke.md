@@ -1,8 +1,8 @@
 ---
 title: Live Claude Code smoke test
-date: 2026-09-11
+date: 2026-09-12
 tags: [operations, smoke-test, hooks]
-status: required-for-live-validation
+status: live-validated
 type: runbook
 ---
 
@@ -11,6 +11,8 @@ type: runbook
 This runbook validates the boundary that unit tests cannot: a real Claude Code process firing `PreCompact`, `PostCompact`, and `SessionStart(source=compact)` around `/compact`.
 
 Run it after upgrading Claude Code or Context Guard, and before calling a new combination live-validated.
+
+Last successful run: Claude Code **2.1.245**, Python **3.13.2**, macOS Darwin **25.6.0 arm64**, Context Guard commit `fcb45fcde35b9ef3e9d81f1a4197f21defe5940f`. Detailed evidence is recorded in GitHub Issue #7 and `docs/compatibility.md`.
 
 ## Preconditions
 
@@ -78,7 +80,7 @@ Run:
 PYTHONPATH=src python3 -m context_guard doctor
 ```
 
-Expected: exit code `0` and `Hook configuration: ok`.
+Expected: exit code `0`, `Hook configuration: ok`, and `Runtime gitignore: ok`.
 
 ## 2. Exercise a real compaction boundary
 
@@ -86,14 +88,17 @@ Start Claude Code from the repository root. In the session:
 
 1. Ask Claude to read `WORKING_STATE.md` and confirm the three `LIVE-SMOKE-*` markers.
 2. Change the session working directory to a nested directory such as `src/context_guard`.
-3. Ask Claude to do a small read-only inspection so the nested cwd is genuinely active.
+3. Ask Claude to do a small read-only inspection so the nested cwd is genuinely active from the model/tool perspective.
 4. Invoke `/compact`.
 5. Immediately after compaction, without manually reopening `WORKING_STATE.md`, ask Claude to state:
    - the current goal
    - the recorded decision
    - the next action
 
-Pass if the three markers survive through the rehydrated context.
+For a stronger survival check, disable file-reading/search/editing tools for the post-compact question. Pass if the three markers survive through the rehydrated context alone.
+
+> [!note]
+> Claude Code 2.1.245 was observed to keep the hook payload `cwd` at the project root even after a Bash-tool `cd`. Starting Claude Code directly from a nested directory is not equivalent: Claude Code may treat that directory as a separate project and not load the parent repository's `.claude/settings.json`. Therefore live smoke verifies the real lifecycle and root containment, while nested-payload-cwd resolution is covered deterministically by unit/handler tests.
 
 ## 3. Inspect artifacts
 
@@ -129,24 +134,34 @@ compact-summary.md
 
 The relevant lifecycle events must share the same `compaction_sequence`. Record the actual order emitted by the installed Claude Code build rather than assuming an order not guaranteed by the hook contract.
 
+For Claude Code 2.1.245, the observed order was:
+
+```text
+PreCompact -> SessionStart(source=compact) -> PostCompact
+```
+
+Do not encode this order as a runtime dependency.
+
 For `rehydrate`, verify `context_chars <= 9000`.
 
 ## 4. Pass criteria
 
 All of the following are required:
 
-- `doctor` passes
+- `doctor` passes, including runtime Git-ignore safety for Git targets
 - `/compact` succeeds normally
 - `LIVE-SMOKE-GOAL`, `LIVE-SMOKE-DECISION`, and `LIVE-SMOKE-NEXT` are available immediately after compaction
 - runtime files stay under the repository-root `.claude/context-guard`
-- no nested `.claude/context-guard` tree is created
+- no nested `.claude/context-guard` tree is created during the root-started lifecycle
+- deterministic nested-payload-cwd test remains green
 - a coherent per-compaction archive exists
+- relevant lifecycle events share the same `compaction_sequence`
 - `context_chars <= 9000`
 - no unexplained `hook_error` remains
 
 ## 5. Evidence and cleanup
 
-Attach only non-sensitive evidence to GitHub issue #7: exact versions, relevant event lines, archive listing, and a short statement of what survived compaction. Do not paste a real project transcript or secrets.
+Attach only non-sensitive evidence to the relevant GitHub validation issue: exact versions, relevant event lines, archive listing, and a short statement of what survived compaction. Do not paste a real project transcript or secrets.
 
 After the smoke test, runtime artifacts may be removed:
 

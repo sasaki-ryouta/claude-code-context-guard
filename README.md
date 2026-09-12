@@ -18,10 +18,12 @@ v0.1.2 の設計は意図的に単純です。
 
 | 項目 | 状態 |
 |---|---|
-| Claude Code | 2.1.245 で hook schema を確認 |
+| Claude Code | 2.1.245 で hook schema + 実 `/compact` lifecycle を確認 |
 | Python | 3.11+ |
-| macOS | lifecycle smoke runbook を用意。version組み合わせごとに実施 |
+| macOS | Darwin 25.6.0 arm64 / Python 3.13.2 で live smoke PASS |
 | Linux | GitHub Actions で 3.11 / 3.12 / 3.13 を検証 |
+
+Live smoke では `LIVE-SMOKE-GOAL` / `LIVE-SMOKE-DECISION` / `LIVE-SMOKE-NEXT` の3 markerがcompactionを越えてrehydrated contextだけから復元され、`rehydrate.context_chars` は 1058、`hook_error` は0件でした。Claude Code 2.1.245 で観測したhook順序は `PreCompact -> SessionStart(source=compact) -> PostCompact` です。実装はこの順序に依存しません。
 
 ## 仕組み
 
@@ -168,6 +170,6 @@ Context Guard は global settings を自動変更しません。
 
 ## 現在の位置づけ
 
-v0.1.2 は **operational baseline** です。外部 memory の有効性を証明したものではありません。次は [docs/benchmark-plan.md](docs/benchmark-plan.md) に従って native compaction、state-only、full guard を ablation し、改善が測定できた機能だけを追加します。
+v0.1.2 は **live-validated operational baseline** です。実 lifecycle と安全性は確認済みですが、外部 memory が native compaction よりタスク成果を改善すること自体はまだ証明していません。次は [docs/benchmark-plan.md](docs/benchmark-plan.md) に従って native compaction、state-only、full guard を ablation し、改善が測定できた機能だけを追加します。
 
 FTS/BM25、embeddings、vector DB、knowledge graph、automatic LLM handoff はまだ default architecture に入れません。
