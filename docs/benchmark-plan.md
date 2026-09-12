@@ -1,6 +1,6 @@
 ---
 title: Benchmark plan
-date: 2026-09-11
+date: 2026-09-12
 tags: [benchmark, evaluation, compaction]
 status: draft
 type: reference
@@ -13,7 +13,7 @@ v0.1 は**測定のための基盤**であり、効果が証明された構成�
 測るための計画である。設計根拠は [[architecture]]、運用は [[operations]]。
 
 > [!warning]
-> v0.1 の時点で効果の主張をしてはならない。まだ何も測っていない。
+> v0.1 の時点で効果の主張をしてはならない。lifecycle correctness は実機確認済みだが、efficacy はまだ測っていない。
 
 ## 1. 答えるべき問い
 
@@ -36,14 +36,31 @@ v0.2 で答える下位問:
 
 | arm | WORKING_STATE | hooks | compaction |
 |---|---|---|---|
-| **A. baseline** | なし | なし | native auto のみ |
-| **B. state only** | あり（Claude が保守） | なし | native auto のみ |
-| **C. full** | あり | 有効 | native auto + semantic manual |
-| **D. hooks only** | なし | 有効 | native auto |
+| **A. baseline** | なし | なし | native auto / benchmark で固定した manual boundary |
+| **B. state only** | あり（Claude が保守） | なし | native auto / benchmark で固定した manual boundary |
+| **C. full** | あり | 有効 | native auto + benchmark で固定した semantic manual boundary |
+| **D. hooks only** | なし | 有効 | native auto / benchmark で固定した manual boundary |
 
 - **B vs C** が hook（rehydration）の寄与を分離する
 - **A vs B** が「WORKING_STATE を書くこと自体」の寄与を分離する（ablation）
 - **D** は state が無いときの hook の無害性の確認（劣化させていないこと）
+
+### 2.1 B vs C を測れる fixture の妥当性条件
+
+B と C の差を測る task では、`WORKING_STATE.md` を読んだ直後に compact してはいけない。
+それでは native summary に state がそのまま残りやすく、rehydration の増分価値を測れない。
+
+fixture は事前に次を満たすこと:
+
+- high-value state を **early phase** で発見・記録する
+- その state を最後に読んでから compaction までに **少なくとも 12 substantive turns** を置く
+- compaction 前の **直近 8 turns では survival marker を再掲しない**
+- intervening work は単なる無意味な padding ではなく、task に必要な investigation / implementation / verification とする
+- compact boundary は arm の結果を見て動かさず、fixture spec に事前固定する
+
+この条件は「B を失敗させるため」の tuning ではない。native summary が high-value state を保持できる十分な距離・干渉がある状況を作り、B vs C が飽和した trivial task になることを防ぐための validity gate である。
+
+live smoke の 535-char state / 1-turn 会話 / 3-of-3 survival は lifecycle correctness の証拠であり、benchmark difficulty の証拠としては扱わない。
 
 ## 3. task suite
 
@@ -56,50 +73,69 @@ task は「compaction を確実に1回以上跨ぐ長さ」であることが条
 3. **仕様からの新機能実装** — acceptance criteria の保持が効く
 4. **failing test の連続修正** — unresolved failure の保持が効く
 
-各 task について: 初期 commit、prompt、成功判定スクリプト（テスト or 検証コマンド）を固定する。
+各 task について: 初期 commit、prompt、成功判定スクリプト（テスト or 検証コマンド）、manual compact boundary を固定する。
 
 ## 4. 測る指標
 
 ### 4.1 compaction survival（H1）— 主指標
 
-compaction 直後の最初の応答に対して、次の項目が保持されているかを採点する。
+survival はまず **machine-verifiable exact marker** で測る。fixture ごとに衝突しない一意 token を high-value state に埋め込む。
 
-| 項目 | 採点 |
+例:
+
+```text
+CGV1-GOAL-7F3A
+CGV1-CRITERION-B8D2
+CGV1-DECISION-2C91
+CGV1-FAILURE-6E44
+CGV1-NEXT-4D88
+CGV1-REJECTED-91AF
+```
+
+compaction 直後、tool access を禁止した probe で該当 state を回答させ、response text に exact token が含まれるかを機械判定する。
+
+| 項目 | primary score |
 |---|---|
-| current goal | 保持 / 劣化 / 消失 |
-| acceptance criteria | 同 |
-| current phase | 同 |
-| next action | 同 |
-| unresolved failure | 同 |
-| 主要 decision の rationale | 同 |
-| 棄却した approach | 同 |
+| current goal | marker present / absent |
+| acceptance criterion | marker present / absent |
+| next action | marker present / absent |
+| unresolved failure | marker present / absent |
+| decision rationale | marker present / absent |
+| rejected approach | marker present / absent |
 
-採点は rubric ベースで、**採点者を条件名から盲検化**する（arm 名を伏せた transcript 断片で採点）。
+**binary survival の primary score に LLM-as-judge は使わない。**
+意味は残っているが wording が変わった、矛盾した、部分的に劣化した、などの secondary analysis のみ rubric + arm-blinded human/LLM scoring を使う。
 
 ### 4.2 context size（H2）
 
-- compaction 直後の active context のトークン数
-- 注入した `additionalContext` の実測 chars（`events.jsonl` の `rehydrate` から取得可能にする）
+- compaction 直後の active context のトークン数（取得可能な場合）
+- 注入した `additionalContext` の実測 chars（`events.jsonl` の `rehydrate`）
 
 ### 4.3 task outcome（H3）
 
 - 成功判定スクリプトの pass/fail
-- compaction 後に**同じファイルを読み直した回数**（stale memory による手戻りの代理指標）
+- hidden acceptance tests の pass/fail
+- compaction 後に**同じファイルを読み直した回数**（手戻りの代理指標。取得可能な場合）
 - compaction 後に**既に棄却した approach を再試行した回数**
-- 総 turn 数 / 総トークン数
+- 総 turn 数 / 総トークン数（取得可能な場合）
+- wall time
 
 ### 4.4 コスト
 
-- hook の実行時間（`events.jsonl` に記録できるようにする）
-- 注入トークンの総量
+- hook の実行時間（取得可能な場合）
+- 注入 context chars / tokens
+- compaction 回数
 
 ## 5. 手続き
 
-1. arm ごとに `.claude/settings.json` を切り替える（`settings.example.json` の有無で表現できる）
-2. 同一 task を **n ≥ 5** 回反復する（LLM の非決定性を吸収する。n は pilot で決める）
-3. 各 run の `.claude/context-guard/sessions/<id>/events.jsonl` と transcript を保存する
-4. compaction の発生位置を `pre_compact` / `post_compact` イベントで特定する
-5. compaction 直後の応答を切り出して盲検採点する
+1. arm ごとに project-local config を切り替える
+2. 同一 task をまず小規模 pilot で回し、instrumentation と fixture validity を検証する
+3. final sample count は pilot 後に固定する。`n >= 5` は最低線であり、事前に根拠を記録する
+4. 各 run の Context Guard events と必要最小限の benchmark provenance を保存する
+5. transcript を保存する場合は benchmark 専用 fixture のみとし、実 project transcript は収集しない
+6. fixed semantic boundary で `/compact` を発火する
+7. compaction 直後に tools disabled の exact-marker probe を実行する
+8. marker score は script で自動採点し、secondary rubric を使う場合だけ arm identity を伏せる
 
 ## 6. threshold sweep（H4）
 
@@ -107,27 +143,32 @@ compaction 直後の最初の応答に対して、次の項目が保持されて
 公式未文書化である。v0.2 で sweep する場合:
 
 - 公式ドキュメントに記載されたことを**再確認してから**使う
-- 記載が無いままなら、`/compact` の手動タイミングを変える（turn 数・phase 境界）ことで
-  実効的な window を近似する
-- sweep する値は pilot で決める。v0.1 は特定の閾値を推奨しない
+- 記載が無いままなら、`/compact` の手動タイミングを変えることで実効的な window を近似する
+- sweep する値は baseline harness が安定した後に別実験として決める
+- v0.2 baseline の arm comparison と threshold sweep を同時に変えない
 
 ## 7. 交絡因子と対処
 
 | 交絡 | 対処 |
 |---|---|
-| model の更新 | 全 arm を同一日・同一 model id で回し、model id を記録する |
-| task の学習効果（同じ repo を繰り返す） | 初期 commit を固定し、worktree を毎回破棄する |
-| WORKING_STATE の品質差 | 更新境界を CLAUDE.md で固定し、手書きで補正しない |
-| 採点者バイアス | 盲検採点 + rubric の事前固定 |
-| compaction 回数の差 | 「compaction 1 回あたり」で正規化する |
+| model の更新 | 全 arm を同一 model id / Claude Code version で回し、実値を記録する |
+| task の学習効果 | 初期 commit を固定し、isolated worktree/copy を毎回破棄する |
+| WORKING_STATE の品質差 | 更新境界を CLAUDE.md で固定し、run 中に人手補正しない |
+| marker の再提示 | compact 前の直近 8 turns では marker を再掲しない |
+| compact distance | state 最終参照から compact まで最低 12 substantive turns を固定する |
+| 採点者バイアス | exact marker primary score + secondary のみ盲検 rubric |
+| compaction 回数の差 | 「compaction 1 回あたり」で正規化し、baseline experiment は fixed boundary を優先する |
+| lifecycle order | `PreCompact -> SessionStart -> PostCompact` を仮定せず、event type と sequence で関連付ける |
 
 ## 8. 撤退条件
 
+撤退条件は **valid fixture / sufficient sample** でのみ適用する。
+trivial fixture（state と compact が近すぎる、marker が直前に再掲される）で B=C になったことを rehydration 無効の根拠にしてはならない。
+
 次のいずれかなら、**v0.3 以降の retrieval 機構には進まない**。
 
-- H1 で B と C の差が n ≥ 5 で有意でない → rehydration は効いていない。
-  hook ではなく WORKING_STATE の運用が効いている（なら hook を捨てる）
-- H3 で C が A を改善しない → 注入コストを払う価値がない
+- validity gate を満たした H1 で B と C の差が、事前に固定した sample / analysis で実質的に無い
+- H3 で C が A を改善しない、または改善幅が operational cost に見合わない
 - H2 で注入が context を実質的に膨らませている → budget 設計の見直しが先
 
 SPEC §18 のとおり、**v0.1 以降の全機能は測定可能な改善を示してから**推奨構成に入る。
