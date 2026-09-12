@@ -119,10 +119,13 @@ Immediately after compact, with repository/file/network tools disabled, ask for 
 > rejected. Without this, a probe could retrieve the canaries instead of recalling them and
 > `survival_score` would measure retrieval rather than survival.
 >
-> The same reasoning applies to the final eight turns. Reread detection searches the **whole
-> tool input** of every tool call, not `Read`/`Bash` alone, and echo detection searches the
-> **whole event stream** including tool results. A `Grep` that returns a canary breaks distance
-> exactly as a spoken canary does.
+> The same reasoning applies to the final eight turns. Reread detection searches the **whole tool
+> input** of every tool call and the **text every tool returned**, matching the four
+> marker-bearing documents by bare filename; echo detection searches the whole event stream for
+> canaries. A repository-wide search names no document and returns no canary, yet its hits are
+> the document's content, so results are inspected as well as inputs. Scripted prompt text is
+> excluded: turns 7-14 instruct the model *not* to reopen those documents by name, and reading
+> that instruction is not a reread.
 
 Primary outcome:
 

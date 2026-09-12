@@ -276,6 +276,33 @@ def _probe_material(value: str) -> bool:
     return any(needle in normalized for needle in MARKER_MATERIAL_FILENAMES)
 
 
+def _tool_results(events: list[dict]) -> list[str]:
+    """Text returned by tools in this turn, as seen by the model."""
+    results: list[str] = []
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        message = event.get("message")
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for item in content:
+            if not isinstance(item, dict) or item.get("type") != "tool_result":
+                continue
+            payload = item.get("content")
+            if isinstance(payload, str):
+                results.append(payload)
+            elif isinstance(payload, list):
+                for part in payload:
+                    if isinstance(part, dict) and isinstance(part.get("text"), str):
+                        results.append(part["text"])
+                    elif isinstance(part, str):
+                        results.append(part)
+    return results
+
+
 def probe_material_reads(events: list[dict]) -> list[str]:
     """Any tool call that names marker-bearing material, whatever the tool.
 
@@ -292,6 +319,14 @@ def probe_material_reads(events: list[dict]) -> list[str]:
             serialized = str(payload)
         if _probe_material(serialized):
             reads.append(f"{name}: {serialized[:200]}")
+    # What came back matters as much as what was asked for: a repository-wide
+    # search names no document in its input, yet its hits are the document's
+    # content. Scripted prompts and assistant prose are deliberately excluded -
+    # turns 7-14 say "Without reopening docs/contract.md ...", and reading that
+    # instruction is not a reread.
+    for result in _tool_results(events):
+        if _probe_material(result):
+            reads.append(f"tool_result: {result[:200]}")
     return reads
 
 

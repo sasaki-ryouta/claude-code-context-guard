@@ -186,6 +186,50 @@ class TestFinalEightDetectionIsToolAgnostic(unittest.TestCase):
                 events = self._turn("Read", {"file_path": f"/tmp/target/{path}"})
                 self.assertTrue(run_arm.probe_material_reads(events), f"{path} evaded detection")
 
+    def test_repository_wide_search_returning_marker_material_is_caught(self):
+        # `rg -n external_id .` names no document and returns no canary, yet the
+        # hits themselves are contract.md content. Detection has to look at what
+        # came back, not only at what was asked for.
+        events = self._turn(
+            "Bash",
+            {"command": "rg -n external_id ."},
+            result_text=(
+                "src/routeforge/parse.py:12:    external_id = raw['id']\n"
+                "docs/contract.md:11:External identifiers are case-sensitive and must be preserved.\n"
+            ),
+        )
+        self.assertTrue(run_arm.probe_material_reads(events))
+
+    def test_scripted_prompt_naming_the_documents_is_not_a_reread(self):
+        # Turns 7-14 say "Without reopening docs/contract.md ...". Treating the
+        # instruction itself as a reread would invalidate every valid run.
+        events = [
+            {
+                "type": "user",
+                "message": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                "Without reopening docs/contract.md, docs/incident.md, "
+                                "docs/recall-tags.md, or WORKING_STATE.md, state the plan."
+                            ),
+                        }
+                    ]
+                },
+            },
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "Understood."}]}},
+        ]
+        self.assertEqual(run_arm.probe_material_reads(events), [])
+
+    def test_ordinary_search_results_are_not_flagged(self):
+        events = self._turn(
+            "Bash",
+            {"command": "rg -n normalize src"},
+            result_text="src/routeforge/normalize.py:4:def normalize_event(event):\n",
+        )
+        self.assertEqual(run_arm.probe_material_reads(events), [])
+
     def test_marker_material_names_are_declared_in_one_place(self):
         # A second list is how contract.md ended up covered and incident.md did not.
         self.assertEqual(
