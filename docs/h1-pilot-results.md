@@ -9,6 +9,7 @@ type: experiment-record
 # H1 pilot results — RouteForge fixture v3
 
 Protocol: [[h1-pilot-preregistration]]. Departures from it: [[h1-pilot-deviations]].
+Failure modes found while making this measurement trustworthy: [[h1-pilot-gate-verdicts]].
 Fixture: [[benchmark-fixture-v3]] (frozen). Positioning: [[research-positioning]].
 
 ## Decision

@@ -2,6 +2,15 @@
 
 Claude Code の context compaction を跨いで、**高価値な作業状態だけ**を project-local に退避し、compaction 後に小さな recovery context として戻す lightweight hook 実装です。
 
+> [!important]
+> **導入を検討している方へ。** 自動の state 再注入か、検査可能な compaction checkpoint が、あなたが既に抱えている問題を解決するなら導入してください。
+> 正確な `WORKING_STATE.md` の維持は依然としてあなたの仕事です。
+> 事前登録した pilot では、**維持された state のみの場合に対する一貫した有用な増分は見つかりませんでした**。
+> コーディング成果の改善も実証されていません。
+> 維持された state で足りていて checkpoint アーカイブが不要なら、**導入を見送ってください**。
+>
+> 詳細は [docs/h1-pilot-results.md](docs/h1-pilot-results.md)。
+
 v0.1.2 の設計は意図的に単純です。
 
 - native compaction を置き換えない
@@ -13,6 +22,16 @@ v0.1.2 の設計は意図的に単純です。
 - `WORKING_STATE.md` + current git state だけを bounded rehydration する
 
 仕様は [SPEC.md](SPEC.md)、設計は [docs/architecture.md](docs/architecture.md)、Claude Code compatibility は [docs/compatibility.md](docs/compatibility.md)、運用判断は [docs/operations.md](docs/operations.md) を参照してください。実 Claude Code lifecycle の検証手順は [docs/live-smoke.md](docs/live-smoke.md) に固定しています。
+
+## このツールが主張すること / しないこと
+
+| | |
+|---|---|
+| **する** | compaction 前に決定的な checkpoint を残す。compaction 後に上限付き（9,000 chars 以下）の recovery context を注入する。hook 障害時に compaction を止めない |
+| **しない** | working state を**代わりに維持すること**。記録されなかった情報を復元すること。記憶の保全を保証すること。コーディング成果の改善 |
+
+`fail-open` が保証するのは **workflow の継続であって記憶の保全ではありません**。
+hook は state を書きません。あなたが `WORKING_STATE.md` に書かなかったことは、compaction 後にも存在しません。
 
 ## 検証対象
 
