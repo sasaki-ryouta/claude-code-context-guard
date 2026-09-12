@@ -2,177 +2,242 @@
 title: Benchmark plan
 date: 2026-09-12
 tags: [benchmark, evaluation, compaction]
-status: draft
+status: active
 type: reference
 ---
 
-# Benchmark plan (v0.2 に向けて)
+# Benchmark plan (v0.2)
 
-v0.1 は**測定のための基盤**であり、効果が証明された構成ではない。
-このドキュメントは「native Claude Code compaction と比べて context-guard に価値があるか」を
-測るための計画である。設計根拠は [[architecture]]、運用は [[operations]]。
+v0.1.x established **lifecycle correctness and operational safety**. It did not establish efficacy.
 
-> [!warning]
-> v0.1 の時点で効果の主張をしてはならない。lifecycle correctness は実機確認済みだが、efficacy はまだ測っていない。
+Before extending the benchmark, review [[research-positioning]]. That document records the prior-art review and defines what this project will no longer spend experiment budget re-proving.
 
-> [!note]
-> 2026-09-12 の live smoke 実測から、B vs C の fixture validity と exact-marker scoring を追加した。
-> live smoke 自体は短く（WORKING_STATE 535 chars、compaction 前会話 1 turn）、benchmark difficulty の証拠には使わない。
+> [!important]
+> v0.2 is now deliberately narrower:
+>
+> **Measure the incremental value of explicit post-compaction rehydration over Claude Code native compaction, documented native best practices, and explicit working state alone.**
 
-## 1. 答えるべき問い
+## 1. Research questions
 
-主問（SPEC §19）:
+### H1 — rehydration increment
 
-> long-running Claude Code session の性能劣化のうち、どれだけを
-> project-local で training-free な context 管理で回避できるか。
-> ただし active working context は小さく保ったまま。
+Does re-injecting curated project-local working state after compaction preserve durable task state better than the same working-state practice without rehydration?
 
-v0.2 で答える下位問:
+The primary causal comparison is **B vs C**.
 
-1. **H1 (survival)**: compaction を越えて goal / decisions / next action が保持される率は、
-   native compaction 単独より context-guard 有りの方が高いか
-2. **H2 (context size)**: compaction 直後の active context は小さく保たれるか
-   （9,000 chars の注入というコストを払う価値があるか）
-3. **H3 (task outcome)**: compaction を跨ぐ task の完遂率・手戻り回数は改善するか
-4. **H4 (threshold)**: auto-compaction window（[[compatibility]] 差分 2）の値は結果に影響するか
+### H2 — operational cost
 
-## 2. 比較する条件（arm）
+What does that mechanism cost in injected context, hook latency, wall time, and observable token use?
 
-| arm | WORKING_STATE | hooks | compaction |
+H2 is **cost accounting**, not a separate large benchmark program. The implementation already enforces a 9,000-character recovery-context ceiling.
+
+### H3 — real software-engineering outcome
+
+Does the mechanism improve completion/regression/rework outcomes on realistic repository-level tasks?
+
+H3 should be validated on an existing public SWE benchmark after the controlled mechanism fixture is valid. Do not keep increasing RouteForge difficulty after observing arm outcomes.
+
+### Deferred — threshold optimization
+
+Do not optimize compaction timing/window until H1 or H3 demonstrates useful incremental value. Threshold sweeps are downstream optimization, not a v0.2 prerequisite.
+
+## 2. Experimental conditions
+
+The mechanism fixture keeps four arms for isolation:
+
+| arm | explicit WORKING_STATE | Context Guard hooks | role |
 |---|---|---|---|
-| **A. baseline** | なし | なし | native auto / benchmark で固定した manual boundary |
-| **B. state only** | あり（Claude が保守） | なし | native auto / benchmark で固定した manual boundary |
-| **C. full** | あり | 有効 | native auto + benchmark で固定した semantic manual boundary |
-| **D. hooks only** | なし | 有効 | native auto / benchmark で固定した manual boundary |
+| **A. native** | no | no | native control |
+| **B. state only** | yes | no | isolates the value of explicit state maintenance |
+| **C. full** | yes | yes | state + post-compaction rehydration |
+| **D. hooks only** | no | yes | negative control for hook-only effects / unintended state creation |
 
-- **B vs C** が hook（rehydration）の寄与を分離する
-- **A vs B** が「WORKING_STATE を書くこと自体」の寄与を分離する（ablation）
-- **D** は state が無いときの hook の無害性の確認（劣化させていないこと）
+For causal interpretation:
 
-### 2.1 B vs C を測れる fixture の妥当性条件
+- **B vs C** isolates rehydration if all state behavior is otherwise identical.
+- **A vs B** estimates the contribution of explicit state maintenance.
+- **D** verifies that hooks without curated state do not create the claimed effect or cause state contamination.
 
-B と C の差を測る task では、`WORKING_STATE.md` を読んだ直後に compact してはいけない。
-それでは native summary に state がそのまま残りやすく、rehydration の増分価値を測れない。
+For later external efficacy work, A must be a **strong native baseline** using Claude Code's documented, arm-independent compaction best practices. Do not intentionally withhold generic `Compact Instructions` merely to weaken the native condition.
 
-fixture は事前に次を満たすこと:
+## 3. RouteForge fixture scope
 
-- high-value state を **early phase** で発見・記録する
-- その state を最後に読んでから compaction までに **少なくとも 12 substantive turns** を置く
-- compaction 前の **直近 8 turns では survival marker を再掲しない**
-- intervening work は単なる無意味な padding ではなく、task に必要な investigation / implementation / verification とする
-- compact boundary は arm の結果を見て動かさず、fixture spec に事前固定する
+RouteForge v3 is a **mechanism and measurement-isolation fixture**, not the final external-validity benchmark.
 
-この条件は「B を失敗させるため」の tuning ではない。native summary が high-value state を保持できる十分な距離・干渉がある状況を作り、B vs C が飽和した trivial task になることを防ぐための validity gate である。
+It exists to prove that the harness can enforce:
 
-live smoke の短い state / 1-turn 会話 / 3-of-3 survival は lifecycle correctness の証拠であり、benchmark difficulty の証拠としては扱わない。
+- fixed manual compaction boundary;
+- no pre-boundary compaction;
+- early state discovery followed by at least 12 substantive turns;
+- no survival-canary reread in the final 8 pre-compact turns;
+- no survival-canary echo in the final 8 pre-compact turns;
+- tools-disabled post-compaction probes;
+- state manipulation by arm: A/D absent, B/C present with all canaries;
+- hook health and bounded rehydration for C/D;
+- exact model / Claude Code version pinning;
+- target and hidden-evaluator isolation.
 
-## 3. task suite
+See [[benchmark-fixture-v3]] for the fixture-specific contract.
 
-再現性のため、**同じ repository の同じ初期 commit** から開始する固定 task を使う。
+### Stop rule for fixture engineering
 
-task は「compaction を確実に1回以上跨ぐ長さ」であることが条件。候補の型:
+Once one real A/B/C/D **unscored** v3 run passes all validity and manipulation checks:
 
-1. **multi-file refactor** — 呼び出し元の追跡が必要。決定の rationale が効く
-2. **bug の根因調査 → 修正** — 棄却した仮説の記憶が効く
-3. **仕様からの新機能実装** — acceptance criteria の保持が効く
-4. **failing test の連続修正** — unresolved failure の保持が効く
+1. freeze v3;
+2. do not tune prompts/task difficulty to amplify arm differences;
+3. do not create v4 solely because a valid pilot produces a small effect;
+4. run only the minimum controlled sample needed to establish whether the mechanism is directionally worth external validation;
+5. move task-outcome validation to an existing public SWE benchmark.
 
-各 task について: 初期 commit、prompt、成功判定スクリプト（テスト or 検証コマンド）、manual compact boundary を固定する。
+## 4. Survival measurement
 
-## 4. 測る指標
+### Primary: exact canary transmission
 
-### 4.1 compaction survival（H1）— 主指標
+Use opaque canaries that are not task vocabulary. The canaries are attached to durable state fields and requested only in the post-compaction probe.
 
-survival はまず **machine-verifiable exact marker** で測る。fixture ごとに衝突しない一意 token を high-value state に埋め込む。
+The score is machine-verifiable exact-string presence/absence. Do not use LLM-as-judge for the primary binary survival score.
 
-例:
+### Secondary: semantic state probe
+
+Use a fixed, tools-disabled, machine-scored semantic probe to distinguish "exact token survived" from "the underlying task fact survived."
+
+Canary survival and semantic survival remain separate metrics.
+
+A positive canary score alone is not a software-engineering efficacy result.
+
+## 5. Fixture validity requirements
+
+A valid B-vs-C survival experiment must create enough distance and interference that the comparison is not trivial, without synthetic filler or outcome-based tuning.
+
+Pre-register and enforce:
+
+- high-value state is discovered and recorded in an early phase;
+- at least **12 substantive turns** occur after state recording and before `/compact`;
+- the final **8 pre-compact turns** do not reread or echo survival canaries;
+- intervening work is real investigation/implementation/verification work;
+- the compaction boundary is fixed before arm outcomes are observed;
+- A/D have no WORKING_STATE before compact;
+- B/C have WORKING_STATE with the complete canary set before compact;
+- one and only one scripted compaction boundary is observed;
+- probe tools are disabled.
+
+v1 and v2 remain historical invalid pilots. Do not edit them in place or reinterpret their scores as efficacy evidence.
+
+## 6. Claude Code isolation controls
+
+### Version and model
+
+Pin and record:
+
+- Claude Code version;
+- resolved model identifier from `system/init`;
+- target initial commit;
+- fixture source commit;
+- prompt hashes;
+- fixed compact boundary.
+
+Abort on version/model drift during a scored run.
+
+### Native Auto Memory
+
+Claude Code Auto Memory is a separate persistence channel and is enabled by default in current Claude Code.
+
+All controlled runs must set:
 
 ```text
-CGV1-GOAL-7F3A
-CGV1-CRITERION-B8D2
-CGV1-DECISION-2C91
-CGV1-FAILURE-6E44
-CGV1-NEXT-4D88
-CGV1-REJECTED-91AF
+CLAUDE_CODE_DISABLE_AUTO_MEMORY=1
 ```
 
-compaction 直後、tool access を禁止した probe で該当 state を回答させ、response text に exact token が含まれるかを機械判定する。
+and record that control in provenance.
 
-| 項目 | primary score |
-|---|---|
-| current goal | marker present / absent |
-| acceptance criterion | marker present / absent |
-| next action | marker present / absent |
-| unresolved failure | marker present / absent |
-| decision rationale | marker present / absent |
-| rejected approach | marker present / absent |
+No new v3 dry run should be treated as valid until this control is implemented in the runner.
 
-**binary survival の primary score に LLM-as-judge は使わない。**
-意味は残っているが wording が変わった、矛盾した、部分的に劣化した、などの secondary analysis のみ rubric + arm-blinded human/LLM scoring を使う。
+### Scripted host configuration
 
-### 4.2 context size（H2）
+Claude Code recommends `--bare` for reproducible scripted calls because it avoids automatic discovery of user/project hooks, skills, plugins, MCP, Auto Memory, and CLAUDE.md.
 
-- compaction 直後の active context のトークン数（取得可能な場合）
-- 注入した `additionalContext` の実測 chars（`events.jsonl` の `rehydrate`）
+However, bare mode also changes authentication behavior. Do not switch a scored series from non-bare to bare mid-experiment. Prefer bare mode only once a reproducible authentication path is established; until then explicitly disable Auto Memory and record configuration provenance.
 
-### 4.3 task outcome（H3）
+### Auto compaction / updater
 
-- 成功判定スクリプトの pass/fail
-- hidden acceptance tests の pass/fail
-- compaction 後に**同じファイルを読み直した回数**（手戻りの代理指標。取得可能な場合）
-- compaction 後に**既に棄却した approach を再試行した回数**
-- 総 turn 数 / 総トークン数（取得可能な場合）
-- wall time
+For the fixed-boundary mechanism fixture:
 
-### 4.4 コスト
+- `DISABLE_AUTO_COMPACT=1`
+- `DISABLE_AUTOUPDATER=1`
 
-- hook の実行時間（取得可能な場合）
-- 注入 context chars / tokens
-- compaction 回数
+Observe `system/compact_boundary` directly for every arm rather than inferring compaction from Context Guard hooks.
 
-## 5. 手続き
+## 7. Per-run measurements
 
-1. arm ごとに project-local config を切り替える
-2. 同一 task をまず小規模 pilot で回し、instrumentation と fixture validity を検証する
-3. final sample count は pilot 後に固定する。`n >= 5` は最低線であり、事前に根拠を記録する
-4. 各 run の Context Guard events と必要最小限の benchmark provenance を保存する
-5. transcript を保存する場合は benchmark 専用 fixture のみとし、実 project transcript は収集しない
-6. fixed semantic boundary で `/compact` を発火する
-7. compaction 直後に tools disabled の exact-marker probe を実行する
-8. marker score は script で自動採点し、secondary rubric を使う場合だけ arm identity を伏せる
+Record the following without turning each item into a separate hypothesis:
 
-## 6. threshold sweep（H4）
+### Mechanism outcomes
 
-[[compatibility]] の差分 2 のとおり、`autoCompactWindow` は 2.1.245 のバイナリに実在するが
-公式未文書化である。v0.2 で sweep する場合:
+- exact canary survival;
+- semantic-probe score;
+- state-manipulation validity;
+- compaction-boundary validity;
+- Context Guard hook errors;
+- recovery-context size.
 
-- 公式ドキュメントに記載されたことを**再確認してから**使う
-- 記載が無いままなら、`/compact` の手動タイミングを変えることで実効的な window を近似する
-- sweep する値は baseline harness が安定した後に別実験として決める
-- v0.2 baseline の arm comparison と threshold sweep を同時に変えない
+### Cost / efficiency
 
-## 7. 交絡因子と対処
+- hook duration where available;
+- recovery-context chars;
+- compact pre/post token observations where Claude Code exposes them;
+- total wall time;
+- turn/tool counts;
+- repeated work / rereads where deterministically measurable.
 
-| 交絡 | 対処 |
-|---|---|
-| model の更新 | 全 arm を同一 model id / Claude Code version で回し、実値を記録する |
-| task の学習効果 | 初期 commit を固定し、isolated worktree/copy を毎回破棄する |
-| WORKING_STATE の品質差 | 更新境界を CLAUDE.md で固定し、run 中に人手補正しない |
-| marker の再提示 | compact 前の直近 8 turns では marker を再掲しない |
-| compact distance | state 最終参照から compact まで最低 12 substantive turns を固定する |
-| 採点者バイアス | exact marker primary score + secondary のみ盲検 rubric |
-| compaction 回数の差 | 「compaction 1 回あたり」で正規化し、baseline experiment は fixed boundary を優先する |
-| lifecycle order | `PreCompact -> SessionStart -> PostCompact` を仮定せず、event type と sequence で関連付ける |
+### Task outcome
 
-## 8. 撤退条件
+- visible tests;
+- hidden acceptance tests;
+- final repository state / evaluator result.
 
-撤退条件は **valid fixture / sufficient sample** でのみ適用する。
-trivial fixture（state と compact が近すぎる、marker が直前に再掲される）で B=C になったことを rehydration 無効の根拠にしてはならない。
+Task outcome from RouteForge is diagnostic only. External H3 claims require a real-world benchmark.
 
-次のいずれかなら、**v0.3 以降の retrieval 機構には進まない**。
+## 8. External validation after RouteForge
 
-- validity gate を満たした H1 で B と C の差が、事前に固定した sample / analysis で実質的に無い
-- H3 で C が A を改善しない、または改善幅が operational cost に見合わない
-- H2 で注入が context を実質的に膨らませている → budget 設計の見直しが先
+Do not build a large bespoke benchmark suite before using available external evidence.
 
-SPEC §18 のとおり、**v0.1 以降の全機能は測定可能な改善を示してから**推奨構成に入る。
+After RouteForge v3 is valid and the controlled mechanism comparison is worth pursuing, pre-register a separate protocol on a public repository-level SWE benchmark.
+
+Candidate families, subject to environment/licensing/reproducibility review at the time of implementation:
+
+- SWE-bench / SWE-bench Verified;
+- SWE-Bench Pro or its verified public subset;
+- RoadmapBench for longer multi-target version-upgrade tasks.
+
+The external protocol should compare a strong native baseline against the minimal Context Guard increment, keep the model/version fixed, and inject compaction at a pre-registered boundary where the benchmark harness permits it.
+
+## 9. Decision rules
+
+Do not proceed to FTS, embeddings, vector databases, knowledge graphs, or another LLM summarizer merely because such systems exist in the literature.
+
+Richer retrieval is justified only if the minimal mechanism establishes a measurable need.
+
+### Stop / simplify
+
+- If valid B vs C shows no practically useful increment, do not add retrieval complexity to rescue the hypothesis.
+- If survival improves but external task outcome does not, describe Context Guard as a memory-preservation aid rather than a demonstrated SWE-performance improvement.
+- If benefit exists but operational cost is excessive, revise budgets/triggering before adding retrieval.
+
+### Continue
+
+If rehydration shows a useful incremental mechanism effect **and** external task evidence suggests real outcome value, then richer retrieval can be evaluated one component at a time with the same ablation discipline.
+
+## 10. Provenance and interpretation
+
+Store enough provenance to reproduce the comparison, but do not publish real project transcripts or sensitive state.
+
+A benchmark result is interpretable only if:
+
+- the fixture/protocol was frozen before scored arm outcomes;
+- arm manipulation checks passed;
+- model/version/config did not drift;
+- hidden evaluators remained hidden;
+- native persistence channels were controlled;
+- invalid pilots are not pooled with valid scored runs.
+
+See [[research-positioning]] for the prior-art rationale behind this reduced scope.
