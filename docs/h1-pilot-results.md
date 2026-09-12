@@ -134,7 +134,7 @@ Descriptive; feeds no decision rule.
 Tool calls count every phase — scripted turns, the compact turn, both probes, and the post-probe
 resume — not scripted turns alone.
 
-Compaction dropped roughly 95k–107k tokens per run across arms. C's rehydration stayed well inside
+Compaction dropped roughly 95k–107k tokens per run, quoted as the range of **arm means** rather than of individual runs. C's rehydration stayed well inside
 the 9,000-character cap. C is the slowest arm by about 8% over B, which is the cost side of the
 mechanism and is worth carrying forward if it is ever revisited.
 
