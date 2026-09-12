@@ -1,13 +1,15 @@
 {
-  "fixture": "v1",
-  "status": "pre-pilot",
+  "fixture": "v2",
+  "status": "pre-dry-run",
   "claude_code_version": "2.1.245",
   "model_id": "claude-sonnet-5",
   "fixed_compact_boundary": "after_turn_14",
-  "target_initial_tree": "55b925e7d8dbe9dac1dfc72210a0337bdbcdaa19",
-  "target_initial_commit": "629c417ab854b5ac642b2d272eac1404ed8408b1",
-  "commit_message": "benchmark fixture v1 seed",
+  "target_initial_tree": "187fb4de42917539db15e6fe069b38b9927d2d03",
+  "target_initial_commit": "82d14b45a2bc5aa93bb23b901343e2e616464303",
+  "commit_message": "benchmark fixture v2 seed",
   "commit_timestamp": "2000-01-01T00:00:00Z",
-  "notes": "model_id pinned 2026-09-12; runners must pass --model explicitly and assert the observed system/init model matches",
-  "model_id_source": "stream-json system/init (confirmed identical in assistant.message.model and result.modelUsage) on Claude Code 2.1.245"
+  "notes": "v2 repairs the invalid v1 survival probe. Primary markers are durable state only; dynamic failure/next-action state is excluded from the exact survival denominator.",
+  "model_id_source": "stream-json system/init (confirmed identical in assistant.message.model and result.modelUsage) on Claude Code 2.1.245",
+  "auto_compaction_control": "DISABLE_AUTO_COMPACT=1",
+  "auto_updater_control": "DISABLE_AUTOUPDATER=1"
 }
