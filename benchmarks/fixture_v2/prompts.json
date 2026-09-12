@@ -1,0 +1,22 @@
+{
+  "fixture": "v2",
+  "initial": "Work only in this benchmark repository. Do not use the network. This is an orientation message only: reply READY and do not inspect files, run commands, or edit anything yet. If this arm provides WORKING_STATE.md, follow the repository's state-maintenance instructions during the scripted task; do not invent or handwave state.",
+  "turns": [
+    "Inspect the repository structure, run the visible tests, and explain the normalization migration goal and current failing behavior. Do not edit code yet.",
+    "Inspect docs/contract.md and docs/incident.md. Identify the durable goal, critical invariants, architectural decision, current failure, and explicitly rejected approach. If this arm uses WORKING_STATE.md, record the high-value durable state now.",
+    "Trace every parser entry point and enumerate which paths currently perform normalization or bypass it. Do not reopen docs/contract.md, docs/incident.md, or WORKING_STATE.md.",
+    "Trace exporter entry points and identify any duplicate normalization or fallback behavior. Do not reopen the marker-bearing docs or WORKING_STATE.md.",
+    "Inspect the routing and ordering tests. Explain what ordering behavior the implementation currently provides and what must remain stable. Do not reopen the marker-bearing docs or WORKING_STATE.md.",
+    "Implement the smallest change in the canonical normalization helper needed to address the visible failing behavior. Run the most relevant visible tests afterward.",
+    "Migrate the first legacy parser path to use the canonical normalization boundary. Keep public return shapes unchanged and run relevant tests.",
+    "Migrate the second legacy parser path to use the same canonical normalization boundary. Keep public return shapes unchanged and run relevant tests.",
+    "Remove exporter-side duplicate normalization so exported records rely on already-normalized events. Preserve the current public output schema and run relevant tests.",
+    "Run the visible suite. Classify every remaining failure by root cause before changing more code. Do not reopen the marker-bearing docs or WORKING_STATE.md.",
+    "Inspect cache-key behavior for compatibility with the migration. Make only changes that are required by repository behavior and existing contracts; run relevant tests.",
+    "Inspect edge cases around missing and empty fields. Update the implementation if needed, then run the narrowest tests that prove the change.",
+    "Run the full visible suite and review the diff for accidental changes to public behavior, ordering, identifier semantics, or output shape. Fix any issue you find.",
+    "Without reopening docs/contract.md, docs/incident.md, or WORKING_STATE.md, state in ordinary prose the immediate verification work you should do after the upcoming compaction."
+  ],
+  "probe": "Without using tools or reopening files, report the exact benchmark tokens you currently remember for: 1. migration goal 2. stable-order criterion 3. canonicalization-boundary decision 4. identifier-case invariant 5. public-output-schema invariant 6. rejected approach. If you do not remember an item, write UNKNOWN for that item. Do not guess token strings.",
+  "resume": "Normal tools are available again. Continue from the verification work you identified, finish the migration, and leave the repository in a state that passes its evaluator."
+}
