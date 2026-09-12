@@ -74,14 +74,40 @@ inferred.
 | replacements used | 1 of 2 permitted |
 | halted | no |
 | wall time | 2.31 h |
-| tool calls | 590 |
+| tool calls | 663 (scripted turns, compact, probes, and resume) |
 
 ### The excluded run
 
-Position 5, arm C. It reread marker-bearing material twice during the final eight turns, which the
-frozen validity check rejects. **The exclusion was driven by protocol, not by score** — that run had
-in fact recalled all six canaries. It was replaced immediately with another arm-C run, before the
-next scheduled run and before anything was aggregated, exactly as registered.
+Position 5, arm C. During turn 13 it ran
+
+```text
+cat .gitignore; git check-ignore -v .claude/context-guard/WORKING_STATE.md
+```
+
+to check whether runtime state was ignored by Git. The filename appears in both the command and its
+output, so the frozen reread detector fired. **It did not read the document's contents** — this is
+the detector being conservative, matching marker-material filenames wherever they appear rather than
+trying to distinguish intent.
+
+The exclusion was nevertheless applied, because the validity check was frozen before the pilot and
+is not relaxed after seeing a run. It was replaced immediately with another arm-C run, before the
+next scheduled run and before anything was aggregated.
+
+**That run scored 0/6 on the primary outcome**, so excluding it raised arm C's mean. This has to be
+stated plainly: the exclusion was decided by a machine check that never sees the score, but its
+effect was favourable to the treatment arm. The pre-registered decision is therefore reported
+alongside a sensitivity check.
+
+#### Sensitivity to the exclusion
+
+| | mean(B) | mean(C) | d | rule | decision |
+|---|---|---|---|---|---|
+| as executed (excluded) | 0.80 | 1.00 | 1/5 | 4 — clears threshold, inconsistent | STOP_NO_USEFUL_INCREMENT |
+| if the excluded run were counted | 0.80 | 0.833 | 1/30 | 5 — increment too small | STOP_NO_USEFUL_INCREMENT |
+
+The decision is identical either way, by different registered rules. The exclusion changes the
+headline contrast substantially — `1/5` versus `1/30` — but not the outcome, and the sensitivity
+analysis is reported so that the contrast is not read as more robust than it is.
 
 ### Controls
 
@@ -100,10 +126,13 @@ Descriptive; feeds no decision rule.
 
 | arm | mean wall time | mean tool calls | rehydration chars | hook errors |
 |---|---|---|---|---|
-| A | 561 s | 43.0 | — | — |
-| B | 623 s | 43.2 | — | — |
-| C | 673 s | 47.8 | 3430–4429 | 0 |
-| D | 588 s | 44.0 | 619 | 0 |
+| A | 561 s | 49.0 | — | — |
+| B | 623 s | 50.0 | — | — |
+| C | 673 s | 52.5 | 3430–4429 | 0 |
+| D | 588 s | 49.0 | 619 | 0 |
+
+Tool calls count every phase — scripted turns, the compact turn, both probes, and the post-probe
+resume — not scripted turns alone.
 
 Compaction dropped roughly 95k–107k tokens per run across arms. C's rehydration stayed well inside
 the 9,000-character cap. C is the slowest arm by about 8% over B, which is the cost side of the
