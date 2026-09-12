@@ -101,7 +101,24 @@ def host_config_provenance() -> dict[str, Any]:
     return provenance
 ARMS = core.ARMS
 WORK_ALLOWED_TOOLS = core.WORK_ALLOWED_TOOLS
-PROBE_DISALLOWED_TOOLS = core.PROBE_DISALLOWED_TOOLS
+# Denylisting cannot be complete - TaskOutput retrieves persisted task output,
+# and new tools arrive with new Claude Code releases - so this list is a first
+# line of defence only. The enforced invariant is behavioural: a probe that used
+# any tool at all invalidates the run (see _validity).
+PROBE_DISALLOWED_TOOLS: tuple[str, ...] = tuple(
+    dict.fromkeys(
+        (
+            *core.PROBE_DISALLOWED_TOOLS,
+            "TaskOutput",
+            "TaskStop",
+            "NotebookEdit",
+            "TodoWrite",
+            "SlashCommand",
+            "ListMcpResourcesTool",
+            "ReadMcpResourceTool",
+        )
+    )
+)
 TURN_TIMEOUT_SECONDS = core.TURN_TIMEOUT_SECONDS
 
 
@@ -348,6 +365,8 @@ def new_run_record(arm: str, *, scored: bool) -> dict[str, Any]:
             "auto_memory_control": "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1",
             "setting_sources_control": SETTING_SOURCES,
             "permission_mode_control": PERMISSION_MODE,
+            "probe_tool_uses": None,
+            "semantic_probe_tool_uses": None,
             "host_surface_observed": None,
             "unexpected_hooks": [],
             "host_config": None,
@@ -392,8 +411,14 @@ def _validity(record: dict[str, Any]) -> bool:
     surface_clean = isinstance(surface, dict) and all(
         surface.get(key) == 0 for key in ("plugins", "mcp_servers")
     )
+    # A probe that reached for a tool may have retrieved the answer instead of
+    # remembering it, so survival would no longer measure what it claims.
+    probes_clean = (
+        record.get("probe_tool_uses") == 0 and record.get("semantic_probe_tool_uses") == 0
+    )
     controls_ok = (
-        record.get("auto_memory_control") == "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1"
+        probes_clean
+        and record.get("auto_memory_control") == "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1"
         and record.get("setting_sources_control") == SETTING_SOURCES
         and surface_clean
         and not record.get("unexpected_hooks")
@@ -611,6 +636,7 @@ def run_one_arm(
                 )
                 (run_dir / "probe.jsonl").write_text(probe_raw, encoding="utf-8")
                 record["unexpected_hooks"].extend(foreign_hooks(probe_events, arm=arm))
+                record["probe_tool_uses"] = core.analyze_turn(probe_events)["tool_uses"]
                 score = score_text(core._event_text(probe_events), markers)
                 record["survival_markers"] = score["markers"]
                 record["survival_score"] = score["score"]
@@ -632,6 +658,7 @@ def run_one_arm(
                     )
                     (run_dir / "semantic-probe.jsonl").write_text(semantic_raw, encoding="utf-8")
                     record["unexpected_hooks"].extend(foreign_hooks(semantic_events, arm=arm))
+                    record["semantic_probe_tool_uses"] = core.analyze_turn(semantic_events)["tool_uses"]
                     record["semantic_probe"] = score_semantic(core._event_text(semantic_events))
                     if semantic_timeout:
                         record["aborted_reason"] = semantic_timeout

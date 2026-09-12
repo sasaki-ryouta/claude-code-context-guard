@@ -107,6 +107,68 @@ class TestStateWritabilityUnderIsolation(unittest.TestCase):
         )
 
 
+class TestProbeMeasuresMemoryNotRetrieval(unittest.TestCase):
+    """A probe that can fetch the answer is not measuring survival.
+
+    Denylisting tool names cannot be complete: retrieval paths such as
+    TaskOutput remain available, and new tools can appear in any Claude Code
+    release. The invariant that actually holds is behavioural - the probe must
+    use no tools at all - so validity is judged on observed tool use rather
+    than on the denylist being exhaustive.
+    """
+
+    def _valid_record(self) -> dict:
+        record = {
+            "arm": "B",
+            "substantive_turns_after_state": list(range(3, 15)),
+            "marker_bearing_reads_in_final_8": [{"turn": n, "reads": []} for n in range(7, 15)],
+            "marker_echoes_in_final_8": [{"turn": n, "markers": []} for n in range(7, 15)],
+            "pre_boundary_compact_boundaries": [],
+            "compact_boundary_events": [{}],
+            "initial_tool_uses": 0,
+            "state_manipulation_valid": True,
+            "target_settings_present": False,
+            "auto_memory_control": "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1",
+            "setting_sources_control": "project",
+            "permission_mode_control": run_arm.PERMISSION_MODE,
+            "host_surface_observed": {"plugins": 0, "skills": 20, "mcp_servers": 0},
+            "unexpected_hooks": [],
+            "probe_tool_uses": 0,
+            "semantic_probe_tool_uses": 0,
+        }
+        return record
+
+    def test_clean_probe_is_valid(self):
+        self.assertTrue(run_arm._validity(self._valid_record()))
+
+    def test_any_tool_use_during_the_primary_probe_invalidates_the_run(self):
+        record = self._valid_record()
+        record["probe_tool_uses"] = 1
+        self.assertFalse(run_arm._validity(record))
+
+    def test_any_tool_use_during_the_semantic_probe_invalidates_the_run(self):
+        record = self._valid_record()
+        record["semantic_probe_tool_uses"] = 1
+        self.assertFalse(run_arm._validity(record))
+
+    def test_unrecorded_probe_tool_use_invalidates_the_run(self):
+        # Absent evidence is not evidence of a clean probe.
+        record = self._valid_record()
+        record["probe_tool_uses"] = None
+        self.assertFalse(run_arm._validity(record))
+
+    def test_known_retrieval_tools_are_also_denied_up_front(self):
+        denied = set(run_arm.PROBE_DISALLOWED_TOOLS)
+        for tool in ("TaskOutput", "Task", "Read", "Bash", "Glob", "Grep", "WebFetch", "WebSearch"):
+            with self.subTest(tool=tool):
+                self.assertIn(tool, denied)
+
+    def test_provenance_carries_probe_tool_counts(self):
+        record = run_arm.new_run_record("C", scored=False)
+        for field in ("probe_tool_uses", "semantic_probe_tool_uses"):
+            self.assertIn(field, record)
+
+
 class TestValidityRejectsUncontrolledRuns(unittest.TestCase):
     def _valid_record(self) -> dict:
         return {
@@ -123,6 +185,8 @@ class TestValidityRejectsUncontrolledRuns(unittest.TestCase):
             "setting_sources_control": "project",
             "host_surface_observed": {"plugins": 0, "skills": 0, "mcp_servers": 0},
             "unexpected_hooks": [],
+            "probe_tool_uses": 0,
+            "semantic_probe_tool_uses": 0,
         }
 
     def test_baseline_record_is_valid(self):
@@ -382,6 +446,8 @@ class TestFixtureV3Validity(unittest.TestCase):
                 "target_settings_present": False,
                 "host_surface_observed": {"plugins": 0, "skills": 0, "mcp_servers": 0},
                 "unexpected_hooks": [],
+                "probe_tool_uses": 0,
+                "semantic_probe_tool_uses": 0,
             }
         )
         self.assertTrue(run_arm._validity(record))
@@ -404,6 +470,8 @@ class TestFixtureV3Validity(unittest.TestCase):
                 "rehydrate_context_chars": 5000,
                 "host_surface_observed": {"plugins": 0, "skills": 0, "mcp_servers": 0},
                 "unexpected_hooks": [],
+                "probe_tool_uses": 0,
+                "semantic_probe_tool_uses": 0,
             }
         )
         self.assertTrue(run_arm._validity(record))
