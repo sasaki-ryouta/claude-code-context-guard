@@ -1,6 +1,6 @@
 {
   "fixture": "v3",
-  "status": "pre-dry-run",
+  "status": "frozen",
   "claude_code_version": "2.1.245",
   "model_id": "claude-sonnet-5",
   "fixed_compact_boundary": "after_turn_14",
@@ -15,5 +15,8 @@
   "hook_settings_delivery": "inline --settings for C/D only",
   "auto_memory_control": "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1",
   "setting_sources_control": "project",
-  "permission_mode_control": "auto"
+  "permission_mode_control": "auto",
+  "frozen_at_commit": "ca5e677b1a448c1a91ac0bbd2f02644404d45855",
+  "frozen_on": "2026-09-13",
+  "validated_by_run": "unscored A/B/C/D validity run 20260912T153417Z"
 }
