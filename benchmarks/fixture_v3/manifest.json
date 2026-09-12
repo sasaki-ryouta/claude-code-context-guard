@@ -1,0 +1,16 @@
+{
+  "fixture": "v3",
+  "status": "pre-dry-run",
+  "claude_code_version": "2.1.245",
+  "model_id": "claude-sonnet-5",
+  "fixed_compact_boundary": "after_turn_14",
+  "target_initial_tree": "f54ec57b4ca34e9eccf029325059cef24bbc4a0d",
+  "target_initial_commit": "c95860f6314c944eb487748002672adea93b2db8",
+  "commit_message": "benchmark fixture v3 seed",
+  "commit_timestamp": "2000-01-01T00:00:00Z",
+  "notes": "v3 separates exact recall canaries from task-working vocabulary, isolates hook settings from the target filesystem, and adds a secondary machine-scored semantic probe.",
+  "model_id_source": "stream-json system/init (confirmed identical in assistant.message.model and result.modelUsage) on Claude Code 2.1.245",
+  "auto_compaction_control": "DISABLE_AUTO_COMPACT=1",
+  "auto_updater_control": "DISABLE_AUTOUPDATER=1",
+  "hook_settings_delivery": "inline --settings for C/D only"
+}

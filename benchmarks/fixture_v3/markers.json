@@ -1,0 +1,11 @@
+{
+  "fixture": "v3",
+  "markers": {
+    "goal": "CGV3-RC-GOAL-4K7M",
+    "order": "CGV3-RC-ORDER-9Q2T",
+    "boundary": "CGV3-RC-BOUNDARY-6H1P",
+    "id_case": "CGV3-RC-IDCASE-3N8R",
+    "shape": "CGV3-RC-SHAPE-5V4C",
+    "rejected": "CGV3-RC-REJECTED-2J7X"
+  }
+}
