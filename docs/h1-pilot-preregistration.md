@@ -18,6 +18,20 @@ This protocol is fixed at the commit that introduces it. Nothing below may be ch
 
 This is a **mechanism** question (H1). It is not a software-engineering outcome claim; that is H3 and lives in #18.
 
+## 1b. What was known at registration
+
+Stated plainly, because this is prospective scored sampling rather than a fully outcome-blind design:
+
+- **no scored run has been executed**; every stored run record has `scored: false`;
+- one **unscored** validity run was observed before this document was written, in which the primary
+  score was A=0.0, B=0.0, C=1.0, D=0.0 and the secondary score was 1.0 in all four arms;
+- those observations are **excluded from the scored aggregate** and are not pooled with pilot data;
+- the contaminated pre-control runs, in which every arm scored 6/6, are quarantined and excluded.
+
+The thresholds, ordering, sample size, and decision rules below were chosen to be defensible under
+either direction of result, and the ceiling rule was written because saturation was observed in the
+contaminated runs — not because a favourable scored outcome was known.
+
 ## 2. Primary comparison
 
 **B vs C.** Both arms receive byte-identical state assets and the same state-maintenance instructions; they differ only in whether Context Guard hooks are installed via inline `--settings`. All other arms are controls.
@@ -32,31 +46,59 @@ Effect measure: `mean(C) - mean(B)`, reported with per-run values and the count 
 
 ## 4. Secondary outcome
 
-`semantic_probe.score`: six fixed multiple-choice questions about durable fixture facts, machine-scored against a committed answer key. Reported the same way. Secondary only; it cannot by itself trigger GO.
+`semantic_probe.score`: six fixed multiple-choice questions about durable fixture facts, machine-scored against a committed answer key. Reported the same way. Secondary only. It is reported descriptively and **never changes the decision**: it cannot
+trigger GO, and it cannot rescue or override a primary result, including a saturated or
+adverse one. Section 5 states the same rule from the other direction.
 
 ## 5. Ceiling and floor rules (fixed in advance)
 
-The diagnostic pre-control run showed arms scoring at or near 6/6. A ceiling must not be reinterpreted after the fact, so:
+The contaminated pre-control run had every arm at 6/6, so a saturating instrument is a real
+possibility and must be handled before results exist.
 
-- if `mean(B) >= 0.95` on the primary outcome, the primary comparison is declared **INCONCLUSIVE_CEILING**: the fixture cannot discriminate, and the decision falls to the secondary outcome under the same thresholds;
-- if both primary and secondary are at ceiling for B, the decision is **STOP_NO_USEFUL_INCREMENT**, recorded explicitly as *"no measurable increment because the instrument saturates"* rather than as evidence that rehydration is useless;
-- if `mean(B) <= 0.05` and `mean(C) <= 0.05`, the result is **INCONCLUSIVE_FLOOR** and the same fallback applies.
+**The primary endpoint always decides.** The secondary endpoint is reported descriptively and
+never changes the decision. This is deliberate: allowing a fallback to the secondary endpoint would
+let a saturated or adverse primary contrast be overridden by a different measure chosen after the
+fact, and section 4 already forbids a secondary-only GO.
 
-A saturating instrument is not repaired by adding retrieval machinery. Under any INCONCLUSIVE outcome, richer retrieval (FTS, embeddings, vector DB, graph, extra LLM memory) is **not** added to rescue the hypothesis.
+Saturation is declared only when the primary comparison cannot discriminate — that is, when the
+arms are pinned together at an extreme:
+
+- **INCONCLUSIVE_CEILING** when `mean(B) >= 0.95` **and** `mean(C) >= 0.95`;
+- **INCONCLUSIVE_FLOOR** when `mean(B) <= 0.05` **and** `mean(C) <= 0.05`.
+
+Both require *both* arms at the extreme. A high or low `mean(B)` alone is not saturation if `C`
+differs from it: that is a measurable contrast and section 6 decides it normally.
+
+Either inconclusive state resolves to **STOP_NO_USEFUL_INCREMENT**, recorded explicitly as *"no
+measurable increment because the instrument saturates"* rather than as evidence that rehydration is
+useless. A saturating instrument is not repaired by adding retrieval machinery: under any
+inconclusive outcome, richer retrieval (FTS, embeddings, vector DB, graph, extra LLM memory) is
+**not** added to rescue the hypothesis.
+
+An adverse primary contrast can never be reported as inconclusive. If `d < 0`, the decision is
+STOP under section 6 regardless of where the means sit.
 
 ## 6. Interpretation thresholds
 
-Let `d = mean(C) - mean(B)` on the primary outcome over valid runs.
+Let `d = mean(C) - mean(B)` on the primary outcome over valid runs. Thresholds are exact fractions
+of the six-canary scale, not decimal approximations: one canary is `1/6`, evaluated as
+`Fraction(1, 6)` so the decision boundary is unambiguous.
 
-| condition | decision |
-|---|---|
-| `d >= 0.167` (at least one of six tags, on average) **and** `mean(C) > mean(B)` in at least 4 of 5 matched positions | GO_EXTERNAL_VALIDATION |
-| `d >= 0.167` but not directionally consistent | STOP_NO_USEFUL_INCREMENT (unstable signal) |
-| `0 < d < 0.167` | STOP_NO_USEFUL_INCREMENT (increment too small to justify external validation cost) |
-| `d <= 0` | STOP_NO_USEFUL_INCREMENT |
-| ceiling/floor rules triggered | as section 5 |
+Decisions are evaluated in this order, and the first matching rule applies:
 
-These are **decision** thresholds for whether to spend external-benchmark budget, not significance claims. With this sample size no p-value or confidence interval will be reported as if it were confirmatory; any dispersion statistic is descriptive only.
+| # | condition | decision |
+|---|---|---|
+| 1 | `d <= 0` | STOP_NO_USEFUL_INCREMENT |
+| 2 | both arms saturated per section 5 | STOP_NO_USEFUL_INCREMENT (inconclusive: instrument saturates) |
+| 3 | `d >= 1/6` **and** `C > B` in at least 4 of the 5 matched blocks | GO_EXTERNAL_VALIDATION |
+| 4 | `d >= 1/6` but not directionally consistent | STOP_NO_USEFUL_INCREMENT (unstable signal) |
+| 5 | `0 < d < 1/6` | STOP_NO_USEFUL_INCREMENT (increment too small to justify external validation cost) |
+
+Rule 1 precedes rule 2 so that an adverse contrast can never be hidden behind saturation.
+
+These are **decision** thresholds for whether to spend external-benchmark budget, not significance
+claims. With this sample size no p-value or confidence interval will be reported as if it were
+confirmatory; any dispersion statistic is descriptive only.
 
 ## 7. Sample plan
 
@@ -92,14 +134,31 @@ Reproduce with `random.Random(20260913)`, shuffling `["B", "C"]` once per block 
 
 ## 9. Validity and exclusion
 
-A scored run is **excluded** from aggregation if `long_distance_valid` is false or `aborted_reason` is non-null, as judged solely by the pre-registered machine checks already implemented in `_validity()`.
+A scored run is **excluded** from aggregation if `long_distance_valid` is false or
+`aborted_reason` is non-null, as judged solely by the pre-registered machine checks already
+implemented in `_validity()`. Validity is never judged by looking at `survival_score` or the
+secondary score.
 
-- an excluded run may be re-run **at most twice in total across the whole pilot**;
-- a re-run uses the same arm and the same protocol;
-- if exclusions leave fewer than 4 valid runs in either B or C, the pilot is reported as **HARD_BLOCKER: insufficient valid samples** and no decision is issued;
-- excluded runs are retained in provenance and listed in the result summary.
+Replacement is **mandatory and immediate**, not a choice:
 
-Validity is never judged by looking at `survival_score`.
+- when a run is excluded, its replacement is executed **before the next scheduled run**, using the
+  same arm and protocol, and before any aggregate is computed;
+- the operator never decides *whether* to retry — only the schedule below applies;
+- at most **two** replacements across the whole pilot;
+- a third exclusion ends the pilot immediately as **HARD_BLOCKER: too many invalid runs**, with no
+  decision issued.
+
+Replacements are additional to the 12 scheduled runs: the cap in section 7 counts scheduled runs,
+and the pilot executes at most 14 Claude Code run invocations in total.
+
+If exclusions still leave fewer than **5** valid runs in either B or C — that is, if a matched
+block cannot be completed within the replacement budget — the pilot reports **HARD_BLOCKER:
+insufficient valid samples** and no decision is issued. A block with one valid arm and one
+permanently invalid arm is dropped from the directional-consistency count in section 6 rule 3, and
+the drop is reported.
+
+Excluded runs are retained in provenance and listed in the result summary with their exclusion
+reason.
 
 ## 10. No outcome-dependent extension
 
