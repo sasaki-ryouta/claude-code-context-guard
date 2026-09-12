@@ -152,6 +152,19 @@ class TestFinalEightDetectionIsToolAgnostic(unittest.TestCase):
         events = self._turn("SomeNewReaderTool", {"target": "docs/incident.md"})
         self.assertTrue(run_arm.probe_material_reads(events))
 
+    def test_bare_filename_reference_is_caught(self):
+        # Serializing the input appends quotes/braces, so an endswith() check
+        # silently stopped matching: `cd .claude/context-guard && head
+        # WORKING_STATE.md` evaded detection entirely.
+        events = self._turn(
+            "Bash", {"command": "cd .claude/context-guard && head -n 10 WORKING_STATE.md"}
+        )
+        self.assertTrue(run_arm.probe_material_reads(events))
+
+    def test_bare_filename_in_any_field_is_caught(self):
+        events = self._turn("SomeReader", {"target": "WORKING_STATE.md", "limit": 10})
+        self.assertTrue(run_arm.probe_material_reads(events))
+
     def test_ordinary_source_access_is_not_flagged(self):
         events = self._turn("Grep", {"pattern": "normalize", "path": "src/routeforge"})
         self.assertEqual(run_arm.probe_material_reads(events), [])

@@ -256,13 +256,18 @@ def marker_echoes(events: list[dict], markers: dict[str, str]) -> list[str]:
 
 
 def _probe_material(value: str) -> bool:
+    # Substring only. The value is usually a serialized tool input, so anchored
+    # checks such as endswith() stop matching once quotes or braces are appended
+    # - which let `cd .claude/context-guard && head WORKING_STATE.md` through.
     normalized = value.replace("\\", "/")
-    return (
-        "docs/contract.md" in normalized
-        or "docs/incident.md" in normalized
-        or "docs/recall-tags.md" in normalized
-        or normalized.endswith("WORKING_STATE.md")
-        or "/WORKING_STATE.md" in normalized
+    return any(
+        needle in normalized
+        for needle in (
+            "docs/contract.md",
+            "docs/incident.md",
+            "docs/recall-tags.md",
+            "WORKING_STATE.md",
+        )
     )
 
 
