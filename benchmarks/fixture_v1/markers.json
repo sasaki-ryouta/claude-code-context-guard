@@ -1,0 +1,11 @@
+{
+  "fixture": "v1",
+  "markers": {
+    "goal": "CGV1-GOAL-7F3A",
+    "criterion": "CGV1-CRITERION-B8D2",
+    "decision": "CGV1-DECISION-2C91",
+    "failure": "CGV1-FAILURE-6E44",
+    "next": "CGV1-NEXT-4D88",
+    "rejected": "CGV1-REJECTED-91AF"
+  }
+}
