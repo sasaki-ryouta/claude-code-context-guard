@@ -24,6 +24,9 @@ This fixture measures the state-transfer mechanism. Task-outcome sensitivity is 
 - model: `claude-sonnet-5`
 - compact boundary: immediately after scripted turn 14
 - auto compaction: disabled with `DISABLE_AUTO_COMPACT=1`
+- native Auto Memory: disabled with `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` in every arm, so the
+  per-repository memory channel cannot confound the state/rehydration comparison
+  (see [[research-positioning]] 4.1); the control is recorded per run as `auto_memory_control`
 - auto updater: disabled with `DISABLE_AUTOUPDATER=1`
 - network: unnecessary / not allowed by work-tool policy
 

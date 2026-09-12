@@ -12,5 +12,6 @@
   "model_id_source": "stream-json system/init (confirmed identical in assistant.message.model and result.modelUsage) on Claude Code 2.1.245",
   "auto_compaction_control": "DISABLE_AUTO_COMPACT=1",
   "auto_updater_control": "DISABLE_AUTOUPDATER=1",
-  "hook_settings_delivery": "inline --settings for C/D only"
+  "hook_settings_delivery": "inline --settings for C/D only",
+  "auto_memory_control": "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1"
 }

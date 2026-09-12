@@ -31,6 +31,59 @@ STATE_RECORDED_TURN = 2
 FINAL_PRE_COMPACT_TURNS = 8
 DISABLE_AUTO_COMPACT = "1"
 DISABLE_AUTOUPDATER = "1"
+# Claude Code Auto Memory is on by default and loads per-repository memory at
+# session start. That is a second persistent-memory channel and would confound
+# a memory experiment, so every arm disables it.
+DISABLE_AUTO_MEMORY = "1"
+
+
+def benchmark_env(target: Path, base: dict[str, str] | None = None) -> dict[str, str]:
+    """The environment shared by every Claude invocation in a run.
+
+    Built in one place so no invocation can quietly run without the controls;
+    a test asserts that each `_run_claude` call is handed this same mapping.
+    """
+    env = dict(os.environ if base is None else base)
+    env.pop("CLAUDE_CODE_AUTO_COMPACT_WINDOW", None)
+    env.update(
+        {
+            "DISABLE_AUTO_COMPACT": DISABLE_AUTO_COMPACT,
+            "DISABLE_AUTOUPDATER": DISABLE_AUTOUPDATER,
+            "CLAUDE_CODE_DISABLE_AUTO_MEMORY": DISABLE_AUTO_MEMORY,
+            "CLAUDE_PROJECT_DIR": str(target),
+        }
+    )
+    return env
+
+
+def host_config_provenance() -> dict[str, Any]:
+    """Identify host configuration that `claude -p` can still discover.
+
+    Without --bare, working-directory and ~/.claude configuration remain
+    visible. Record presence, size, and digest only - never the contents,
+    which can hold credentials.
+    """
+    home = Path.home() / ".claude"
+    candidates = {
+        "user_settings": home / "settings.json",
+        "user_memory": home / "CLAUDE.md",
+        "user_claude_json": Path.home() / ".claude.json",
+    }
+    provenance: dict[str, Any] = {}
+    for name, path in candidates.items():
+        try:
+            if path.is_file():
+                data = path.read_bytes()
+                provenance[name] = {
+                    "present": True,
+                    "bytes": len(data),
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                }
+            else:
+                provenance[name] = {"present": False, "bytes": None, "sha256": None}
+        except OSError:
+            provenance[name] = {"present": None, "bytes": None, "sha256": None}
+    return provenance
 ARMS = core.ARMS
 WORK_ALLOWED_TOOLS = core.WORK_ALLOWED_TOOLS
 PROBE_DISALLOWED_TOOLS = core.PROBE_DISALLOWED_TOOLS
@@ -242,6 +295,8 @@ def new_run_record(arm: str, *, scored: bool) -> dict[str, Any]:
             "fixture_source_dirty": None,
             "auto_compaction_control": "DISABLE_AUTO_COMPACT=1",
             "auto_updater_control": "DISABLE_AUTOUPDATER=1",
+            "auto_memory_control": "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1",
+            "host_config": None,
             "hook_settings_delivery": "inline --settings" if core.arm_config(arm)["hooks"] else None,
             "target_settings_present": None,
             "pre_boundary_compact_boundaries": [],
@@ -369,15 +424,8 @@ def run_one_arm(
             raise ValueError("target unexpectedly contains .claude/settings.json")
 
         settings_json = hook_settings_json(arm, context_guard_root)
-        env = dict(os.environ)
-        env.pop("CLAUDE_CODE_AUTO_COMPACT_WINDOW", None)
-        env.update(
-            {
-                "DISABLE_AUTO_COMPACT": DISABLE_AUTO_COMPACT,
-                "DISABLE_AUTOUPDATER": DISABLE_AUTOUPDATER,
-                "CLAUDE_PROJECT_DIR": str(target),
-            }
-        )
+        env = benchmark_env(target)
+        record["host_config"] = host_config_provenance()
 
         model_id = manifest.get("model_id")
         if not isinstance(model_id, str) or not model_id:

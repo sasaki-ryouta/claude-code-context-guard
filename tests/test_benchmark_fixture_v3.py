@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import ast
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,6 +15,90 @@ from benchmarks.fixture_v3.score_markers import load_markers
 FIXTURE = REPO_ROOT / "benchmarks" / "fixture_v3"
 MANIFEST = json.loads((FIXTURE / "manifest.json").read_text(encoding="utf-8"))
 PROMPTS = json.loads((FIXTURE / "prompts.json").read_text(encoding="utf-8"))
+
+
+class TestNativeMemoryContamination(unittest.TestCase):
+    """Auto Memory is a second persistent-memory channel and would confound H1."""
+
+    def _env(self) -> dict:
+        with tempfile.TemporaryDirectory() as tmp:
+            return run_arm.benchmark_env(Path(tmp))
+
+    def test_native_auto_memory_is_disabled(self):
+        self.assertEqual(self._env()["CLAUDE_CODE_DISABLE_AUTO_MEMORY"], "1")
+
+    def test_existing_controls_are_retained(self):
+        env = self._env()
+        self.assertEqual(env["DISABLE_AUTO_COMPACT"], "1")
+        self.assertEqual(env["DISABLE_AUTOUPDATER"], "1")
+
+    def test_undocumented_window_control_is_removed(self):
+        # v2 relied on an undocumented key; v3 must not inherit it from the host.
+        import os
+
+        original = os.environ.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW")
+        os.environ["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = "1000000"
+        try:
+            self.assertNotIn("CLAUDE_CODE_AUTO_COMPACT_WINDOW", self._env())
+        finally:
+            if original is None:
+                os.environ.pop("CLAUDE_CODE_AUTO_COMPACT_WINDOW", None)
+            else:
+                os.environ["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = original
+
+    def test_host_cannot_re_enable_auto_memory(self):
+        import os
+
+        original = os.environ.get("CLAUDE_CODE_DISABLE_AUTO_MEMORY")
+        os.environ["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "0"
+        try:
+            self.assertEqual(self._env()["CLAUDE_CODE_DISABLE_AUTO_MEMORY"], "1")
+        finally:
+            if original is None:
+                os.environ.pop("CLAUDE_CODE_DISABLE_AUTO_MEMORY", None)
+            else:
+                os.environ["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = original
+
+    def test_every_claude_invocation_receives_the_controlled_environment(self):
+        # The control is only real if no invocation builds its own environment.
+        source = (
+            Path(run_arm.__file__).read_text(encoding="utf-8")
+        )
+        tree = ast.parse(source)
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "_run_claude"
+        ]
+        self.assertGreaterEqual(len(calls), 4, "expected the scripted turns, compact, and probes")
+        for call in calls:
+            env_arg = call.args[2] if len(call.args) >= 3 else None
+            self.assertIsInstance(env_arg, ast.Name, ast.unparse(call))
+            self.assertEqual(env_arg.id, "env", ast.unparse(call))
+
+    def test_provenance_records_the_control(self):
+        record = run_arm.new_run_record("C", scored=False)
+        self.assertIn("auto_memory_control", record)
+        self.assertEqual(record["auto_memory_control"], "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1")
+
+    def test_provenance_records_host_configuration_surface(self):
+        # Without --bare, claude -p can still discover host configuration;
+        # record enough to spot drift between runs.
+        provenance = run_arm.host_config_provenance()
+        self.assertIsInstance(provenance, dict)
+        for key in ("user_settings", "user_memory", "user_claude_json"):
+            self.assertIn(key, provenance)
+            entry = provenance[key]
+            self.assertIn("present", entry)
+            if entry["present"]:
+                self.assertRegex(entry["sha256"], r"^[0-9a-f]{64}$")
+
+    def test_host_provenance_never_stores_configuration_contents(self):
+        blob = json.dumps(run_arm.host_config_provenance())
+        for leak in ("apiKey", "token", "oauth", "-----BEGIN"):
+            self.assertNotIn(leak, blob)
 
 
 class TestFixtureV3Determinism(unittest.TestCase):
