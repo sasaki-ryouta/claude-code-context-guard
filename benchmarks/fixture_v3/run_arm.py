@@ -242,7 +242,17 @@ def compact_boundaries(events: list[dict]) -> list[dict[str, Any]]:
 
 
 def marker_echoes(events: list[dict], markers: dict[str, str]) -> list[str]:
-    return v2.marker_echoes(events, markers)
+    """Canaries appearing anywhere in a turn, including tool results.
+
+    Assistant prose alone is not enough: a Grep that returns a canary puts it
+    back in context just as effectively as saying it, so the whole event stream
+    for the turn is searched.
+    """
+    try:
+        blob = json.dumps(events, ensure_ascii=False)
+    except (TypeError, ValueError):
+        blob = str(events)
+    return [name for name, token in markers.items() if token in blob]
 
 
 def _probe_material(value: str) -> bool:
@@ -257,16 +267,21 @@ def _probe_material(value: str) -> bool:
 
 
 def probe_material_reads(events: list[dict]) -> list[str]:
+    """Any tool call that names marker-bearing material, whatever the tool.
+
+    Inspecting only Read.file_path and Bash.command missed Grep and Glob, and
+    would miss every tool added in a future release. The whole tool input is
+    searched instead, so distance is judged on what was touched rather than on
+    which tool touched it.
+    """
     reads: list[str] = []
     for name, payload in core._tool_uses(events):
-        if name == "Read":
-            path = payload.get("file_path")
-            if isinstance(path, str) and _probe_material(path):
-                reads.append(path)
-        elif name == "Bash":
-            command = payload.get("command")
-            if isinstance(command, str) and _probe_material(command):
-                reads.append(command)
+        try:
+            serialized = json.dumps(payload, ensure_ascii=False)
+        except (TypeError, ValueError):
+            serialized = str(payload)
+        if _probe_material(serialized):
+            reads.append(f"{name}: {serialized[:200]}")
     return reads
 
 

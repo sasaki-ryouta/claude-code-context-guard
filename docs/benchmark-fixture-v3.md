@@ -118,6 +118,11 @@ Immediately after compact, with repository/file/network tools disabled, ask for 
 > `semantic_probe_tool_uses` are recorded per run and must both be `0`; an unrecorded count is also
 > rejected. Without this, a probe could retrieve the canaries instead of recalling them and
 > `survival_score` would measure retrieval rather than survival.
+>
+> The same reasoning applies to the final eight turns. Reread detection searches the **whole
+> tool input** of every tool call, not `Read`/`Bash` alone, and echo detection searches the
+> **whole event stream** including tool results. A `Grep` that returns a canary breaks distance
+> exactly as a spoken canary does.
 
 Primary outcome:
 

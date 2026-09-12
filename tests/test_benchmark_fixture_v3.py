@@ -107,6 +107,69 @@ class TestStateWritabilityUnderIsolation(unittest.TestCase):
         )
 
 
+class TestFinalEightDetectionIsToolAgnostic(unittest.TestCase):
+    """Distance is broken by *touching* the material, whatever tool did it.
+
+    Detection previously inspected only Read.file_path and Bash.command, so a
+    final-eight Grep over the contract returned reads=[] and echoes=[] and the
+    run stayed valid - recently retrieved canaries masquerading as
+    long-distance survival.
+    """
+
+    def _turn(self, tool: str, payload: dict, result_text: str = "") -> list[dict]:
+        events = [
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {"type": "tool_use", "id": "t1", "name": tool, "input": payload}
+                    ]
+                },
+            }
+        ]
+        if result_text:
+            events.append(
+                {
+                    "type": "user",
+                    "message": {
+                        "content": [
+                            {"type": "tool_result", "tool_use_id": "t1", "content": result_text}
+                        ]
+                    },
+                }
+            )
+        return events
+
+    def test_grep_over_marker_material_counts_as_a_reread(self):
+        events = self._turn("Grep", {"pattern": "CGV2", "path": "docs/contract.md"})
+        self.assertTrue(run_arm.probe_material_reads(events))
+
+    def test_glob_over_marker_material_counts_as_a_reread(self):
+        events = self._turn("Glob", {"pattern": "docs/recall-tags.md"})
+        self.assertTrue(run_arm.probe_material_reads(events))
+
+    def test_unknown_future_tool_touching_the_material_is_caught(self):
+        events = self._turn("SomeNewReaderTool", {"target": "docs/incident.md"})
+        self.assertTrue(run_arm.probe_material_reads(events))
+
+    def test_ordinary_source_access_is_not_flagged(self):
+        events = self._turn("Grep", {"pattern": "normalize", "path": "src/routeforge"})
+        self.assertEqual(run_arm.probe_material_reads(events), [])
+
+    def test_canary_returned_in_a_tool_result_counts_as_an_echo(self):
+        markers = load_markers()
+        token = markers["goal"]
+        events = self._turn(
+            "Grep", {"pattern": "CGV2", "path": "src"}, result_text=f"match: {token}"
+        )
+        self.assertIn("goal", run_arm.marker_echoes(events, markers))
+
+    def test_clean_turn_has_no_echo(self):
+        markers = load_markers()
+        events = self._turn("Grep", {"pattern": "normalize", "path": "src"}, result_text="no matches")
+        self.assertEqual(run_arm.marker_echoes(events, markers), [])
+
+
 class TestProbeMeasuresMemoryNotRetrieval(unittest.TestCase):
     """A probe that can fetch the answer is not measuring survival.
 
