@@ -35,6 +35,14 @@ DISABLE_AUTOUPDATER = "1"
 # session start. That is a second persistent-memory channel and would confound
 # a memory experiment, so every arm disables it.
 DISABLE_AUTO_MEMORY = "1"
+# Host user settings load plugins, hooks, skills and MCP servers into every
+# `claude -p`. In the pre-control diagnostic run a host SessionStart plugin hook
+# injected the PREVIOUS arm's session summary into the next arm's first turn, so
+# restricting setting sources is a validity control, not hygiene. "project" is a
+# documented --setting-sources value and, unlike --bare, leaves auth untouched.
+SETTING_SOURCES = "project"
+# Hooks the fixture itself installs through inline --settings for C/D.
+EXPECTED_HOOK_PREFIXES = ("PreCompact", "PostCompact", "SessionStart")
 
 
 def benchmark_env(target: Path, base: dict[str, str] | None = None) -> dict[str, str]:
@@ -165,9 +173,44 @@ def claude_argv(
         allowed=allowed,
         disallowed=disallowed,
     )
+    argv.extend(["--setting-sources", SETTING_SOURCES])
     if settings_json is not None:
         argv.extend(["--settings", settings_json])
     return argv
+
+
+def host_surface(events: list[dict]) -> dict[str, int]:
+    """Plugins/skills/MCP servers the session actually loaded, from system/init."""
+    surface = {"plugins": 0, "skills": 0, "mcp_servers": 0}
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "system" and event.get("subtype") == "init":
+            for key in surface:
+                value = event.get(key)
+                surface[key] = len(value) if isinstance(value, list) else 0
+            break
+    return surface
+
+
+def foreign_hooks(events: list[dict], *, arm: str) -> list[str]:
+    """Hook executions that this fixture did not install.
+
+    Arms A and B install no hooks, so any execution is foreign. Arms C and D
+    install the three Context Guard hooks, so only other names are foreign.
+    """
+    expected = EXPECTED_HOOK_PREFIXES if core.arm_config(arm)["hooks"] else ()
+    names: list[str] = []
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "system" and event.get("subtype") == "hook_started":
+            name = event.get("hook_name")
+            if not isinstance(name, str):
+                continue
+            if not name.startswith(expected) if expected else True:
+                names.append(name)
+    return names
 
 
 def compact_boundaries(events: list[dict]) -> list[dict[str, Any]]:
@@ -296,6 +339,9 @@ def new_run_record(arm: str, *, scored: bool) -> dict[str, Any]:
             "auto_compaction_control": "DISABLE_AUTO_COMPACT=1",
             "auto_updater_control": "DISABLE_AUTOUPDATER=1",
             "auto_memory_control": "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1",
+            "setting_sources_control": SETTING_SOURCES,
+            "host_surface_observed": None,
+            "unexpected_hooks": [],
             "host_config": None,
             "hook_settings_delivery": "inline --settings" if core.arm_config(arm)["hooks"] else None,
             "target_settings_present": None,
@@ -332,8 +378,19 @@ def _validity(record: dict[str, Any]) -> bool:
             and isinstance(context_chars, int)
             and context_chars <= 9000
         )
+    surface = record.get("host_surface_observed")
+    surface_clean = isinstance(surface, dict) and all(
+        surface.get(key) == 0 for key in ("plugins", "skills", "mcp_servers")
+    )
+    controls_ok = (
+        record.get("auto_memory_control") == "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1"
+        and record.get("setting_sources_control") == SETTING_SOURCES
+        and surface_clean
+        and not record.get("unexpected_hooks")
+    )
     return (
-        len(substantive) >= 12
+        controls_ok
+        and len(substantive) >= 12
         and not any(item.get("reads") for item in reads if isinstance(item, dict))
         and not any(item.get("markers") for item in echoes if isinstance(item, dict))
         and not record.get("pre_boundary_compact_boundaries")
@@ -456,6 +513,7 @@ def run_one_arm(
             analysis = core.analyze_turn(events)
             analysis["marker_bearing_reads"] = probe_material_reads(events)
             record["turn_analyses"].append({"turn": turn_number, **analysis})
+            record["unexpected_hooks"].extend(foreign_hooks(events, arm=arm))
             boundaries = compact_boundaries(events)
             if boundaries:
                 record["pre_boundary_compact_boundaries"].extend(
@@ -473,6 +531,7 @@ def run_one_arm(
 
             if turn_number == INITIAL_TURN:
                 record["initial_tool_uses"] = analysis["tool_uses"]
+                record["host_surface_observed"] = host_surface(events)
                 init = core._first_init(events)
                 observed_model = init.get("model") if init else None
                 record["model_id_observed"] = observed_model
@@ -519,6 +578,7 @@ def run_one_arm(
                 env,
             )
             (run_dir / "compact.jsonl").write_text(compact_raw, encoding="utf-8")
+            record["unexpected_hooks"].extend(foreign_hooks(compact_events, arm=arm))
             record["compaction_observed"] = {
                 "scripted_compact_succeeded": None if compact_code is None else compact_code == 0,
                 "pre_compact_events": None,
@@ -540,6 +600,7 @@ def run_one_arm(
                     env,
                 )
                 (run_dir / "probe.jsonl").write_text(probe_raw, encoding="utf-8")
+                record["unexpected_hooks"].extend(foreign_hooks(probe_events, arm=arm))
                 score = score_text(core._event_text(probe_events), markers)
                 record["survival_markers"] = score["markers"]
                 record["survival_score"] = score["score"]
@@ -560,6 +621,7 @@ def run_one_arm(
                         env,
                     )
                     (run_dir / "semantic-probe.jsonl").write_text(semantic_raw, encoding="utf-8")
+                    record["unexpected_hooks"].extend(foreign_hooks(semantic_events, arm=arm))
                     record["semantic_probe"] = score_semantic(core._event_text(semantic_events))
                     if semantic_timeout:
                         record["aborted_reason"] = semantic_timeout
