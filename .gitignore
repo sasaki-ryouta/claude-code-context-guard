@@ -9,3 +9,6 @@
 __pycache__/
 *.py[cod]
 .venv/
+
+# Benchmark run artifacts (raw transcripts and provenance): reproducible, not committed.
+benchmarks/runs/
