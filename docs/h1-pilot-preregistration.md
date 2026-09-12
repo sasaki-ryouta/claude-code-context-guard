@@ -88,13 +88,17 @@ Decisions are evaluated in this order, and the first matching rule applies:
 
 | # | condition | decision |
 |---|---|---|
-| 1 | `d <= 0` | STOP_NO_USEFUL_INCREMENT |
+| 1 | `d < 0` | STOP_NO_USEFUL_INCREMENT (adverse contrast) |
 | 2 | both arms saturated per section 5 | STOP_NO_USEFUL_INCREMENT (inconclusive: instrument saturates) |
+| 2b | `d == 0` | STOP_NO_USEFUL_INCREMENT (no increment) |
 | 3 | `d >= 1/6` **and** `C > B` in at least 4 of the 5 matched blocks | GO_EXTERNAL_VALIDATION |
 | 4 | `d >= 1/6` but not directionally consistent | STOP_NO_USEFUL_INCREMENT (unstable signal) |
 | 5 | `0 < d < 1/6` | STOP_NO_USEFUL_INCREMENT (increment too small to justify external validation cost) |
 
-Rule 1 precedes rule 2 so that an adverse contrast can never be hidden behind saturation.
+An adverse contrast is decided **before** saturation, so a negative result can never be hidden
+behind a ceiling. A zero contrast is decided **after** saturation, so two arms pinned at an extreme
+are recorded as a saturating instrument rather than as a measured absence of effect — those are
+different claims and the distinction is fixed here rather than chosen later.
 
 These are **decision** thresholds for whether to spend external-benchmark budget, not significance
 claims. With this sample size no p-value or confidence interval will be reported as if it were
