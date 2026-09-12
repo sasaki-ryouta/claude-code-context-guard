@@ -41,6 +41,13 @@ DISABLE_AUTO_MEMORY = "1"
 # restricting setting sources is a validity control, not hygiene. "project" is a
 # documented --setting-sources value and, unlike --bare, leaves auth untouched.
 SETTING_SOURCES = "project"
+# `.claude/` is a built-in sensitive path. With host settings excluded the
+# model's WORKING_STATE write is denied, which silently removes the behaviour
+# arms B/C exist to test. "auto" restores the same permission posture the host
+# previously supplied via defaultMode, but declares it explicitly so the run no
+# longer depends on host configuration. It is applied identically to every arm,
+# and is deliberately not bypassPermissions.
+PERMISSION_MODE = "auto"
 # Hooks the fixture itself installs through inline --settings for C/D.
 EXPECTED_HOOK_PREFIXES = ("PreCompact", "PostCompact", "SessionStart")
 
@@ -94,7 +101,24 @@ def host_config_provenance() -> dict[str, Any]:
     return provenance
 ARMS = core.ARMS
 WORK_ALLOWED_TOOLS = core.WORK_ALLOWED_TOOLS
-PROBE_DISALLOWED_TOOLS = core.PROBE_DISALLOWED_TOOLS
+# Denylisting cannot be complete - TaskOutput retrieves persisted task output,
+# and new tools arrive with new Claude Code releases - so this list is a first
+# line of defence only. The enforced invariant is behavioural: a probe that used
+# any tool at all invalidates the run (see _validity).
+PROBE_DISALLOWED_TOOLS: tuple[str, ...] = tuple(
+    dict.fromkeys(
+        (
+            *core.PROBE_DISALLOWED_TOOLS,
+            "TaskOutput",
+            "TaskStop",
+            "NotebookEdit",
+            "TodoWrite",
+            "SlashCommand",
+            "ListMcpResourcesTool",
+            "ReadMcpResourceTool",
+        )
+    )
+)
 TURN_TIMEOUT_SECONDS = core.TURN_TIMEOUT_SECONDS
 
 
@@ -173,7 +197,7 @@ def claude_argv(
         allowed=allowed,
         disallowed=disallowed,
     )
-    argv.extend(["--setting-sources", SETTING_SOURCES])
+    argv.extend(["--setting-sources", SETTING_SOURCES, "--permission-mode", PERMISSION_MODE])
     if settings_json is not None:
         argv.extend(["--settings", settings_json])
     return argv
@@ -218,31 +242,91 @@ def compact_boundaries(events: list[dict]) -> list[dict[str, Any]]:
 
 
 def marker_echoes(events: list[dict], markers: dict[str, str]) -> list[str]:
-    return v2.marker_echoes(events, markers)
+    """Canaries appearing anywhere in a turn, including tool results.
+
+    Assistant prose alone is not enough: a Grep that returns a canary puts it
+    back in context just as effectively as saying it, so the whole event stream
+    for the turn is searched.
+    """
+    try:
+        blob = json.dumps(events, ensure_ascii=False)
+    except (TypeError, ValueError):
+        blob = str(events)
+    return [name for name, token in markers.items() if token in blob]
+
+
+# Every document that carries canaries or the durable facts behind them.
+# Declared once: a second list is how contract.md ended up covered while
+# incident.md did not.
+MARKER_MATERIAL_FILENAMES: tuple[str, ...] = (
+    "contract.md",
+    "incident.md",
+    "recall-tags.md",
+    "WORKING_STATE.md",
+)
 
 
 def _probe_material(value: str) -> bool:
+    # Match on bare filenames. Two earlier gaps came from qualifying the
+    # needles: an anchored endswith() missed a serialized input, and path
+    # prefixes missed `cd docs && cat contract.md`. A basename cannot be
+    # sidestepped by changing directory first, and these names are specific
+    # enough that an ordinary task reference to them is itself a reread.
     normalized = value.replace("\\", "/")
-    return (
-        "docs/contract.md" in normalized
-        or "docs/incident.md" in normalized
-        or "docs/recall-tags.md" in normalized
-        or normalized.endswith("WORKING_STATE.md")
-        or "/WORKING_STATE.md" in normalized
-    )
+    return any(needle in normalized for needle in MARKER_MATERIAL_FILENAMES)
+
+
+def _tool_results(events: list[dict]) -> list[str]:
+    """Text returned by tools in this turn, as seen by the model."""
+    results: list[str] = []
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        message = event.get("message")
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for item in content:
+            if not isinstance(item, dict) or item.get("type") != "tool_result":
+                continue
+            payload = item.get("content")
+            if isinstance(payload, str):
+                results.append(payload)
+            elif isinstance(payload, list):
+                for part in payload:
+                    if isinstance(part, dict) and isinstance(part.get("text"), str):
+                        results.append(part["text"])
+                    elif isinstance(part, str):
+                        results.append(part)
+    return results
 
 
 def probe_material_reads(events: list[dict]) -> list[str]:
+    """Any tool call that names marker-bearing material, whatever the tool.
+
+    Inspecting only Read.file_path and Bash.command missed Grep and Glob, and
+    would miss every tool added in a future release. The whole tool input is
+    searched instead, so distance is judged on what was touched rather than on
+    which tool touched it.
+    """
     reads: list[str] = []
     for name, payload in core._tool_uses(events):
-        if name == "Read":
-            path = payload.get("file_path")
-            if isinstance(path, str) and _probe_material(path):
-                reads.append(path)
-        elif name == "Bash":
-            command = payload.get("command")
-            if isinstance(command, str) and _probe_material(command):
-                reads.append(command)
+        try:
+            serialized = json.dumps(payload, ensure_ascii=False)
+        except (TypeError, ValueError):
+            serialized = str(payload)
+        if _probe_material(serialized):
+            reads.append(f"{name}: {serialized[:200]}")
+    # What came back matters as much as what was asked for: a repository-wide
+    # search names no document in its input, yet its hits are the document's
+    # content. Scripted prompts and assistant prose are deliberately excluded -
+    # turns 7-14 say "Without reopening docs/contract.md ...", and reading that
+    # instruction is not a reread.
+    for result in _tool_results(events):
+        if _probe_material(result):
+            reads.append(f"tool_result: {result[:200]}")
     return reads
 
 
@@ -309,8 +393,11 @@ def score_semantic(text: str, answers: dict[str, str] | None = None) -> dict[str
     for question, answer in pattern.findall(text):
         if question in found:
             found[question].append(answer)
+    # The stream carries one printed response twice (assistant message plus
+    # result string), so identical repeats are one answer, not a contradiction.
+    # Genuinely conflicting answers still resolve to None.
     response = {
-        question: values[0] if len(values) == 1 else None
+        question: values[0] if values and len(set(values)) == 1 else None
         for question, values in found.items()
     }
     correct = {
@@ -340,6 +427,9 @@ def new_run_record(arm: str, *, scored: bool) -> dict[str, Any]:
             "auto_updater_control": "DISABLE_AUTOUPDATER=1",
             "auto_memory_control": "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1",
             "setting_sources_control": SETTING_SOURCES,
+            "permission_mode_control": PERMISSION_MODE,
+            "probe_tool_uses": None,
+            "semantic_probe_tool_uses": None,
             "host_surface_observed": None,
             "unexpected_hooks": [],
             "host_config": None,
@@ -379,11 +469,19 @@ def _validity(record: dict[str, Any]) -> bool:
             and context_chars <= 9000
         )
     surface = record.get("host_surface_observed")
+    # Claude Code's own bundled skills load in every arm; only host-supplied
+    # plugins and MCP servers indicate that user settings leaked in.
     surface_clean = isinstance(surface, dict) and all(
-        surface.get(key) == 0 for key in ("plugins", "skills", "mcp_servers")
+        surface.get(key) == 0 for key in ("plugins", "mcp_servers")
+    )
+    # A probe that reached for a tool may have retrieved the answer instead of
+    # remembering it, so survival would no longer measure what it claims.
+    probes_clean = (
+        record.get("probe_tool_uses") == 0 and record.get("semantic_probe_tool_uses") == 0
     )
     controls_ok = (
-        record.get("auto_memory_control") == "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1"
+        probes_clean
+        and record.get("auto_memory_control") == "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1"
         and record.get("setting_sources_control") == SETTING_SOURCES
         and surface_clean
         and not record.get("unexpected_hooks")
@@ -601,6 +699,7 @@ def run_one_arm(
                 )
                 (run_dir / "probe.jsonl").write_text(probe_raw, encoding="utf-8")
                 record["unexpected_hooks"].extend(foreign_hooks(probe_events, arm=arm))
+                record["probe_tool_uses"] = core.analyze_turn(probe_events)["tool_uses"]
                 score = score_text(core._event_text(probe_events), markers)
                 record["survival_markers"] = score["markers"]
                 record["survival_score"] = score["score"]
@@ -622,6 +721,7 @@ def run_one_arm(
                     )
                     (run_dir / "semantic-probe.jsonl").write_text(semantic_raw, encoding="utf-8")
                     record["unexpected_hooks"].extend(foreign_hooks(semantic_events, arm=arm))
+                    record["semantic_probe_tool_uses"] = core.analyze_turn(semantic_events)["tool_uses"]
                     record["semantic_probe"] = score_semantic(core._event_text(semantic_events))
                     if semantic_timeout:
                         record["aborted_reason"] = semantic_timeout

@@ -74,6 +74,275 @@ class TestHostConfigurationIsolation(unittest.TestCase):
         self.assertEqual(run_arm.foreign_hooks(events, arm="C"), [])
 
 
+class TestStateWritabilityUnderIsolation(unittest.TestCase):
+    """Isolation must not remove the treatment it is supposed to measure.
+
+    `.claude/` is a built-in sensitive path: with host settings excluded, the
+    model's WORKING_STATE write is denied and arms B/C silently lose the very
+    behaviour under test. The first isolated run failed its manipulation check
+    for exactly this reason - every canary absent, state file present but never
+    filled in.
+    """
+
+    def test_every_invocation_sets_an_explicit_permission_mode(self):
+        argv = run_arm.claude_argv("p", "claude-sonnet-5", settings_json=None)
+        self.assertIn("--permission-mode", argv)
+        self.assertEqual(argv[argv.index("--permission-mode") + 1], run_arm.PERMISSION_MODE)
+
+    def test_permission_mode_is_identical_for_every_arm(self):
+        # A difference here would be a treatment difference, not a control.
+        modes = set()
+        for settings in (None, '{"hooks":{}}'):
+            argv = run_arm.claude_argv("p", "claude-sonnet-5", settings_json=settings)
+            modes.add(argv[argv.index("--permission-mode") + 1])
+        self.assertEqual(len(modes), 1)
+
+    def test_permission_mode_is_not_a_blanket_bypass(self):
+        self.assertNotEqual(run_arm.PERMISSION_MODE, "bypassPermissions")
+
+    def test_provenance_records_the_permission_mode(self):
+        self.assertEqual(
+            run_arm.new_run_record("B", scored=False)["permission_mode_control"],
+            run_arm.PERMISSION_MODE,
+        )
+
+
+class TestFinalEightDetectionIsToolAgnostic(unittest.TestCase):
+    """Distance is broken by *touching* the material, whatever tool did it.
+
+    Detection previously inspected only Read.file_path and Bash.command, so a
+    final-eight Grep over the contract returned reads=[] and echoes=[] and the
+    run stayed valid - recently retrieved canaries masquerading as
+    long-distance survival.
+    """
+
+    def _turn(self, tool: str, payload: dict, result_text: str = "") -> list[dict]:
+        events = [
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {"type": "tool_use", "id": "t1", "name": tool, "input": payload}
+                    ]
+                },
+            }
+        ]
+        if result_text:
+            events.append(
+                {
+                    "type": "user",
+                    "message": {
+                        "content": [
+                            {"type": "tool_result", "tool_use_id": "t1", "content": result_text}
+                        ]
+                    },
+                }
+            )
+        return events
+
+    def test_grep_over_marker_material_counts_as_a_reread(self):
+        events = self._turn("Grep", {"pattern": "CGV2", "path": "docs/contract.md"})
+        self.assertTrue(run_arm.probe_material_reads(events))
+
+    def test_glob_over_marker_material_counts_as_a_reread(self):
+        events = self._turn("Glob", {"pattern": "docs/recall-tags.md"})
+        self.assertTrue(run_arm.probe_material_reads(events))
+
+    def test_unknown_future_tool_touching_the_material_is_caught(self):
+        events = self._turn("SomeNewReaderTool", {"target": "docs/incident.md"})
+        self.assertTrue(run_arm.probe_material_reads(events))
+
+    def test_bare_filename_reference_is_caught(self):
+        # Serializing the input appends quotes/braces, so an endswith() check
+        # silently stopped matching: `cd .claude/context-guard && head
+        # WORKING_STATE.md` evaded detection entirely.
+        events = self._turn(
+            "Bash", {"command": "cd .claude/context-guard && head -n 10 WORKING_STATE.md"}
+        )
+        self.assertTrue(run_arm.probe_material_reads(events))
+
+    def test_bare_filename_in_any_field_is_caught(self):
+        events = self._turn("SomeReader", {"target": "WORKING_STATE.md", "limit": 10})
+        self.assertTrue(run_arm.probe_material_reads(events))
+
+    def test_every_marker_document_is_caught_by_bare_filename(self):
+        # Path-qualified needles missed `cd docs && cat contract.md`, whose
+        # contents carry the semantic answers even though no canary appears.
+        for filename in ("contract.md", "incident.md", "recall-tags.md", "WORKING_STATE.md"):
+            with self.subTest(filename=filename):
+                events = self._turn("Bash", {"command": f"cd docs && cat {filename}"})
+                self.assertTrue(
+                    run_arm.probe_material_reads(events), f"{filename} evaded detection"
+                )
+
+    def test_every_marker_document_is_caught_with_a_path(self):
+        for path in (
+            "docs/contract.md",
+            "docs/incident.md",
+            "docs/recall-tags.md",
+            ".claude/context-guard/WORKING_STATE.md",
+        ):
+            with self.subTest(path=path):
+                events = self._turn("Read", {"file_path": f"/tmp/target/{path}"})
+                self.assertTrue(run_arm.probe_material_reads(events), f"{path} evaded detection")
+
+    def test_repository_wide_search_returning_marker_material_is_caught(self):
+        # `rg -n external_id .` names no document and returns no canary, yet the
+        # hits themselves are contract.md content. Detection has to look at what
+        # came back, not only at what was asked for.
+        events = self._turn(
+            "Bash",
+            {"command": "rg -n external_id ."},
+            result_text=(
+                "src/routeforge/parse.py:12:    external_id = raw['id']\n"
+                "docs/contract.md:11:External identifiers are case-sensitive and must be preserved.\n"
+            ),
+        )
+        self.assertTrue(run_arm.probe_material_reads(events))
+
+    def test_scripted_prompt_naming_the_documents_is_not_a_reread(self):
+        # Turns 7-14 say "Without reopening docs/contract.md ...". Treating the
+        # instruction itself as a reread would invalidate every valid run.
+        events = [
+            {
+                "type": "user",
+                "message": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                "Without reopening docs/contract.md, docs/incident.md, "
+                                "docs/recall-tags.md, or WORKING_STATE.md, state the plan."
+                            ),
+                        }
+                    ]
+                },
+            },
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "Understood."}]}},
+        ]
+        self.assertEqual(run_arm.probe_material_reads(events), [])
+
+    def test_ordinary_search_results_are_not_flagged(self):
+        events = self._turn(
+            "Bash",
+            {"command": "rg -n normalize src"},
+            result_text="src/routeforge/normalize.py:4:def normalize_event(event):\n",
+        )
+        self.assertEqual(run_arm.probe_material_reads(events), [])
+
+    def test_marker_material_names_are_declared_in_one_place(self):
+        # A second list is how contract.md ended up covered and incident.md did not.
+        self.assertEqual(
+            sorted(run_arm.MARKER_MATERIAL_FILENAMES),
+            ["WORKING_STATE.md", "contract.md", "incident.md", "recall-tags.md"],
+        )
+
+    def test_ordinary_source_access_is_not_flagged(self):
+        events = self._turn("Grep", {"pattern": "normalize", "path": "src/routeforge"})
+        self.assertEqual(run_arm.probe_material_reads(events), [])
+
+    def test_canary_returned_in_a_tool_result_counts_as_an_echo(self):
+        markers = load_markers()
+        token = markers["goal"]
+        events = self._turn(
+            "Grep", {"pattern": "CGV2", "path": "src"}, result_text=f"match: {token}"
+        )
+        self.assertIn("goal", run_arm.marker_echoes(events, markers))
+
+    def test_clean_turn_has_no_echo(self):
+        markers = load_markers()
+        events = self._turn("Grep", {"pattern": "normalize", "path": "src"}, result_text="no matches")
+        self.assertEqual(run_arm.marker_echoes(events, markers), [])
+
+
+class TestSemanticScorerToleratesStreamDuplication(unittest.TestCase):
+    """One printed response appears twice in the stream, not two answers."""
+
+    ANSWER = "Q1=B\nQ2=C\nQ3=A\nQ4=B\nQ5=C\nQ6=A"
+
+    def test_single_response_scores_normally(self):
+        key = run_arm.load_semantic_answers()
+        self.assertEqual(run_arm.score_semantic(self.ANSWER, key)["score"], 1.0)
+
+    def test_response_repeated_by_the_stream_still_scores(self):
+        # _event_text concatenates the assistant message and the result string,
+        # so every correct answer used to resolve to None and every arm scored
+        # 0/6 regardless of what the model said.
+        key = run_arm.load_semantic_answers()
+        doubled = self.ANSWER + "\n" + self.ANSWER
+        self.assertEqual(run_arm.score_semantic(doubled, key)["score"], 1.0)
+
+    def test_genuinely_contradictory_answers_are_still_rejected(self):
+        key = run_arm.load_semantic_answers()
+        conflicting = self.ANSWER + "\nQ1=C"
+        result = run_arm.score_semantic(conflicting, key)
+        self.assertIsNone(result["answers"]["Q1"])
+        self.assertFalse(result["correct"]["Q1"])
+        self.assertTrue(result["correct"]["Q2"])
+
+
+class TestProbeMeasuresMemoryNotRetrieval(unittest.TestCase):
+    """A probe that can fetch the answer is not measuring survival.
+
+    Denylisting tool names cannot be complete: retrieval paths such as
+    TaskOutput remain available, and new tools can appear in any Claude Code
+    release. The invariant that actually holds is behavioural - the probe must
+    use no tools at all - so validity is judged on observed tool use rather
+    than on the denylist being exhaustive.
+    """
+
+    def _valid_record(self) -> dict:
+        record = {
+            "arm": "B",
+            "substantive_turns_after_state": list(range(3, 15)),
+            "marker_bearing_reads_in_final_8": [{"turn": n, "reads": []} for n in range(7, 15)],
+            "marker_echoes_in_final_8": [{"turn": n, "markers": []} for n in range(7, 15)],
+            "pre_boundary_compact_boundaries": [],
+            "compact_boundary_events": [{}],
+            "initial_tool_uses": 0,
+            "state_manipulation_valid": True,
+            "target_settings_present": False,
+            "auto_memory_control": "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1",
+            "setting_sources_control": "project",
+            "permission_mode_control": run_arm.PERMISSION_MODE,
+            "host_surface_observed": {"plugins": 0, "skills": 20, "mcp_servers": 0},
+            "unexpected_hooks": [],
+            "probe_tool_uses": 0,
+            "semantic_probe_tool_uses": 0,
+        }
+        return record
+
+    def test_clean_probe_is_valid(self):
+        self.assertTrue(run_arm._validity(self._valid_record()))
+
+    def test_any_tool_use_during_the_primary_probe_invalidates_the_run(self):
+        record = self._valid_record()
+        record["probe_tool_uses"] = 1
+        self.assertFalse(run_arm._validity(record))
+
+    def test_any_tool_use_during_the_semantic_probe_invalidates_the_run(self):
+        record = self._valid_record()
+        record["semantic_probe_tool_uses"] = 1
+        self.assertFalse(run_arm._validity(record))
+
+    def test_unrecorded_probe_tool_use_invalidates_the_run(self):
+        # Absent evidence is not evidence of a clean probe.
+        record = self._valid_record()
+        record["probe_tool_uses"] = None
+        self.assertFalse(run_arm._validity(record))
+
+    def test_known_retrieval_tools_are_also_denied_up_front(self):
+        denied = set(run_arm.PROBE_DISALLOWED_TOOLS)
+        for tool in ("TaskOutput", "Task", "Read", "Bash", "Glob", "Grep", "WebFetch", "WebSearch"):
+            with self.subTest(tool=tool):
+                self.assertIn(tool, denied)
+
+    def test_provenance_carries_probe_tool_counts(self):
+        record = run_arm.new_run_record("C", scored=False)
+        for field in ("probe_tool_uses", "semantic_probe_tool_uses"):
+            self.assertIn(field, record)
+
+
 class TestValidityRejectsUncontrolledRuns(unittest.TestCase):
     def _valid_record(self) -> dict:
         return {
@@ -90,6 +359,8 @@ class TestValidityRejectsUncontrolledRuns(unittest.TestCase):
             "setting_sources_control": "project",
             "host_surface_observed": {"plugins": 0, "skills": 0, "mcp_servers": 0},
             "unexpected_hooks": [],
+            "probe_tool_uses": 0,
+            "semantic_probe_tool_uses": 0,
         }
 
     def test_baseline_record_is_valid(self):
@@ -111,8 +382,15 @@ class TestValidityRejectsUncontrolledRuns(unittest.TestCase):
         record["setting_sources_control"] = None
         self.assertFalse(run_arm._validity(record))
 
+    def test_bundled_skills_do_not_invalidate_a_run(self):
+        # Claude Code ships its own skills; they load identically in every arm
+        # and are not a host-configuration leak.
+        record = self._valid_record()
+        record["host_surface_observed"] = {"plugins": 0, "skills": 20, "mcp_servers": 0}
+        self.assertTrue(run_arm._validity(record))
+
     def test_observed_host_surface_invalidates_the_run(self):
-        for key in ("plugins", "skills", "mcp_servers"):
+        for key in ("plugins", "mcp_servers"):
             with self.subTest(surface=key):
                 record = self._valid_record()
                 record["host_surface_observed"] = {**record["host_surface_observed"], key: 1}
@@ -321,10 +599,20 @@ class TestFixtureV3SemanticProbe(unittest.TestCase):
         self.assertEqual(result["score"], 1.0)
         self.assertTrue(all(result["correct"].values()))
 
-    def test_semantic_scorer_rejects_missing_or_duplicate_answers(self):
-        result = run_arm.score_semantic("Q1=B\nQ1=B\nQ2=C\n")
-        self.assertIsNone(result["answers"]["Q1"])
-        self.assertLess(result["score"], 1.0)
+    def test_semantic_scorer_rejects_missing_or_contradictory_answers(self):
+        # An identical repeat is the stream echoing one response, not two
+        # answers: _event_text concatenates the assistant message with the
+        # result string, so treating any repeat as ambiguous scored every arm
+        # 0/6 no matter what the model said. A contradiction is still rejected.
+        repeated = run_arm.score_semantic("Q1=B\nQ1=B\nQ2=C\n")
+        self.assertEqual(repeated["answers"]["Q1"], "B")
+        self.assertLess(repeated["score"], 1.0)  # Q3-Q6 are missing
+
+        contradictory = run_arm.score_semantic("Q1=B\nQ1=C\nQ2=C\n")
+        self.assertIsNone(contradictory["answers"]["Q1"])
+
+        missing = run_arm.score_semantic("Q2=C\n")
+        self.assertIsNone(missing["answers"]["Q1"])
 
 
 class TestFixtureV3Validity(unittest.TestCase):
@@ -342,6 +630,8 @@ class TestFixtureV3Validity(unittest.TestCase):
                 "target_settings_present": False,
                 "host_surface_observed": {"plugins": 0, "skills": 0, "mcp_servers": 0},
                 "unexpected_hooks": [],
+                "probe_tool_uses": 0,
+                "semantic_probe_tool_uses": 0,
             }
         )
         self.assertTrue(run_arm._validity(record))
@@ -364,6 +654,8 @@ class TestFixtureV3Validity(unittest.TestCase):
                 "rehydrate_context_chars": 5000,
                 "host_surface_observed": {"plugins": 0, "skills": 0, "mcp_servers": 0},
                 "unexpected_hooks": [],
+                "probe_tool_uses": 0,
+                "semantic_probe_tool_uses": 0,
             }
         )
         self.assertTrue(run_arm._validity(record))

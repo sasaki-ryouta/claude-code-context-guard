@@ -14,5 +14,6 @@
   "auto_updater_control": "DISABLE_AUTOUPDATER=1",
   "hook_settings_delivery": "inline --settings for C/D only",
   "auto_memory_control": "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1",
-  "setting_sources_control": "project"
+  "setting_sources_control": "project",
+  "permission_mode_control": "auto"
 }

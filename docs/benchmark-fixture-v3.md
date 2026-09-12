@@ -27,6 +27,12 @@ This fixture measures the state-transfer mechanism. Task-outcome sensitivity is 
 - native Auto Memory: disabled with `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` in every arm, so the
   per-repository memory channel cannot confound the state/rehydration comparison
   (see [[research-positioning]] 4.1); the control is recorded per run as `auto_memory_control`
+- permissions: `--permission-mode auto` on every invocation. `.claude/` is a built-in
+  sensitive path, so with host settings excluded the model's WORKING_STATE write is denied and
+  arms B/C lose the behaviour under test - the first isolated run failed its manipulation check
+  for exactly that reason. This restores the permission posture the host previously supplied
+  implicitly, declares it explicitly, and applies it identically to every arm. It is not
+  `bypassPermissions`
 - auto updater: disabled with `DISABLE_AUTOUPDATER=1`
 - host configuration: excluded with `--setting-sources project` on every invocation, so user
   settings cannot load plugins, hooks, skills, or MCP servers into a benchmark session.
@@ -35,7 +41,9 @@ This fixture measures the state-transfer mechanism. Task-outcome sensitivity is 
   direct cross-arm leak. `--bare` would also isolate but changes the authentication path, so it
   is not used mid-series. Each run records `setting_sources_control`, the observed
   `host_surface_observed` (plugins/skills/MCP counts from `system/init`), and any
-  `unexpected_hooks`; a run is invalid unless the surface is empty and no foreign hook ran
+  `unexpected_hooks`. A run is invalid if any host-supplied plugin or MCP server loaded, or if a
+  foreign hook ran. Claude Code's own bundled skills load in every arm regardless of settings,
+  so they are recorded but are not treated as contamination
 - network: unnecessary / not allowed by work-tool policy
 
 Any version or model drift aborts the run.
@@ -102,6 +110,22 @@ Long-distance validity requires:
 ## 6. Primary exact probe
 
 Immediately after compact, with repository/file/network tools disabled, ask for the six exact recall tags. The prompt contains no token strings.
+
+> [!important]
+> The probe must use **no tools at all**. Denylisting tool names cannot be made complete - retrieval
+> paths such as `TaskOutput` exist, and new tools ship with new Claude Code releases - so a probe
+> that used any tool invalidates the run regardless of which tool it was. `probe_tool_uses` and
+> `semantic_probe_tool_uses` are recorded per run and must both be `0`; an unrecorded count is also
+> rejected. Without this, a probe could retrieve the canaries instead of recalling them and
+> `survival_score` would measure retrieval rather than survival.
+>
+> The same reasoning applies to the final eight turns. Reread detection searches the **whole tool
+> input** of every tool call and the **text every tool returned**, matching the four
+> marker-bearing documents by bare filename; echo detection searches the whole event stream for
+> canaries. A repository-wide search names no document and returns no canary, yet its hits are
+> the document's content, so results are inspected as well as inputs. Scripted prompt text is
+> excluded: turns 7-14 instruct the model *not* to reopen those documents by name, and reading
+> that instruction is not a reread.
 
 Primary outcome:
 
