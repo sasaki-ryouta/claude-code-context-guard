@@ -77,6 +77,20 @@ class TestHookNeverBlocks(unittest.TestCase):
         self.assertEqual(run_cli("pre-compaction-typo", "{}").returncode, 0)
 
 
+class TestHarnessIsolation(unittest.TestCase):
+    def test_the_suite_never_writes_into_this_repository(self):
+        # Hooks fall back to the process cwd when the payload omits one
+        # (SPEC 2.4). If the harness inherits the developer's cwd, that
+        # fallback lands in this repository and pollutes real runtime state
+        # — it did exactly that during the live smoke test on 2026-09-12.
+        payload = {"session_id": "harness-isolation-probe", "trigger": "manual"}
+        result = run_cli("pre-compact", json.dumps(payload))
+
+        self.assertEqual(result.returncode, 0, result.stderr[-400:])
+        leaked = REPO_ROOT / ".claude" / "context-guard" / "sessions" / "harness-isolation-probe"
+        self.assertFalse(leaked.exists(), f"the test harness wrote into the repository: {leaked}")
+
+
 class TestNoWritesOutsideGuardRoot(unittest.TestCase):
     def test_hooks_only_touch_the_guard_root(self):
         with tempfile.TemporaryDirectory() as tmp:
