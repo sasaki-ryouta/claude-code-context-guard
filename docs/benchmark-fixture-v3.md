@@ -41,7 +41,9 @@ This fixture measures the state-transfer mechanism. Task-outcome sensitivity is 
   direct cross-arm leak. `--bare` would also isolate but changes the authentication path, so it
   is not used mid-series. Each run records `setting_sources_control`, the observed
   `host_surface_observed` (plugins/skills/MCP counts from `system/init`), and any
-  `unexpected_hooks`; a run is invalid unless the surface is empty and no foreign hook ran
+  `unexpected_hooks`. A run is invalid if any host-supplied plugin or MCP server loaded, or if a
+  foreign hook ran. Claude Code's own bundled skills load in every arm regardless of settings,
+  so they are recorded but are not treated as contamination
 - network: unnecessary / not allowed by work-tool policy
 
 Any version or model drift aborts the run.
@@ -108,6 +110,14 @@ Long-distance validity requires:
 ## 6. Primary exact probe
 
 Immediately after compact, with repository/file/network tools disabled, ask for the six exact recall tags. The prompt contains no token strings.
+
+> [!important]
+> The probe must use **no tools at all**. Denylisting tool names cannot be made complete - retrieval
+> paths such as `TaskOutput` exist, and new tools ship with new Claude Code releases - so a probe
+> that used any tool invalidates the run regardless of which tool it was. `probe_tool_uses` and
+> `semantic_probe_tool_uses` are recorded per run and must both be `0`; an unrecorded count is also
+> rejected. Without this, a probe could retrieve the canaries instead of recalling them and
+> `survival_score` would measure retrieval rather than survival.
 
 Primary outcome:
 
