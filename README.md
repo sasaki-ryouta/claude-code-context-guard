@@ -62,7 +62,28 @@ SessionStart(source=compact) -> <= 9,000 chars rehydrate
 
 `cwd` が session 中に `cd` で変わっても、hook command が継承する `CLAUDE_PROJECT_DIR` を stable project root として優先します。直接呼び出し時は Git root、それも無ければ current `cwd` にフォールバックします。
 
-## 5分セットアップ
+## まず試す native-first 構成
+
+H1 pilot の結果から、最初から hook を入れるより先に **maintained working state 自体**を運用するのが推奨 baseline です。
+
+```text
+user-level ~/.claude/CLAUDE.md policy
++ Claude Code Auto Memory enabled
++ project-local small WORKING_STATE
++ semantic manual /compact when useful
++ native auto-compaction as a safety net
++ no Context Guard hooks by default
+```
+
+copyable な global policy、project opt-in、state の分離方針は [docs/native-first-setup.md](docs/native-first-setup.md) を参照してください。
+
+- global example: [examples/global-CLAUDE.md](examples/global-CLAUDE.md)
+- project-local opt-in example: [examples/project-CLAUDE.local.md](examples/project-CLAUDE.local.md)
+- working-state schema: [.claude/context-guard/WORKING_STATE.template.md](.claude/context-guard/WORKING_STATE.template.md)
+
+Auto Memory を無効化する環境変数や `--setting-sources project` は、benchmark で persistence channel を分離するために使った control です。通常の日常利用の default recommendation ではありません。
+
+## Context Guard hooks を使う場合の5分セットアップ
 
 ### 1. Context Guard を配置
 
@@ -189,6 +210,6 @@ Context Guard は global settings を自動変更しません。
 
 ## 現在の位置づけ
 
-v0.1.2 は **live-validated operational baseline** です。実 lifecycle と安全性は確認済みですが、外部 memory が native compaction よりタスク成果を改善すること自体はまだ証明していません。次は [docs/benchmark-plan.md](docs/benchmark-plan.md) に従って native compaction、state-only、full guard を ablation し、改善が測定できた機能だけを追加します。
+v0.1.2 は **live-validated operational baseline** です。hook lifecycle と安全性は確認済みですが、H1 pilot は maintained state のみの場合に対する一貫した有用な rehydration increment を示しませんでした。そのため hook は default recommendation ではなく、automatic reinsertion や inspectable checkpoint が具体的に必要なproject向けの optional mechanism として扱います。
 
-FTS/BM25、embeddings、vector DB、knowledge graph、automatic LLM handoff はまだ default architecture に入れません。
+研究ロードマップは [docs/roadmap.md](docs/roadmap.md) のとおり closed です。FTS/BM25、embeddings、vector DB、knowledge graph、automatic LLM handoff を結果救済のために追加しません。
