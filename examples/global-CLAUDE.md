@@ -12,7 +12,7 @@ Update the working state at semantic boundaries, not every turn:
 - a major implementation unit completed;
 - verification started;
 - the task goal changed;
-- immediately before recommending or running a deliberate `/compact`.
+- immediately before recommending a deliberate `/compact`.
 
 Keep only high-value durable state:
 
@@ -40,13 +40,13 @@ Treat the filesystem as authoritative. After compaction, reread the files needed
 
 Use native auto-compaction as a safety net. Prefer deliberate compaction at a semantic boundary when accumulated context is mostly disposable.
 
-Before `/compact`:
+Before recommending `/compact`:
 
 1. bring the project-local working state up to date;
 2. preserve the current goal, acceptance criteria, phase, next action, important decisions and rationale, unresolved failures, and relevant pointers;
 3. aggressively compress or discard verbose tool output, successful command output, repeated reads, resolved hypotheses, superseded plans, and long source excerpts.
 
-After `/compact`:
+After compaction:
 
 1. treat current files as the source of truth;
 2. use the working state as a handoff and pointer map, not as a substitute for the repository;
