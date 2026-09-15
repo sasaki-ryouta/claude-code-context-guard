@@ -62,7 +62,32 @@ SessionStart(source=compact) -> <= 9,000 chars rehydrate
 
 `cwd` が session 中に `cd` で変わっても、hook command が継承する `CLAUDE_PROJECT_DIR` を stable project root として優先します。直接呼び出し時は Git root、それも無ければ current `cwd` にフォールバックします。
 
-## 5分セットアップ
+## まず試す native-first 構成
+
+H1 pilot が直接支持するのは、**Context Guard rehydration hooks を default に昇格させる根拠が得られなかった**という限定的な結論です。Auto Memory、manual `/compact`、native auto-compaction の日常運用上の組み合わせ自体を H1 が検証したわけではありません。
+
+その上で、運用を単純に保つ baseline として次を推奨します。
+
+```text
+user-level ~/.claude/CLAUDE.md policy
++ Claude Code Auto Memory enabled
++ checkout-local WORKING_STATE.local.md
++ semantic manual /compact when useful
++ native auto-compaction as a safety net
++ no Context Guard hooks by default
+```
+
+copyable な global policy、project opt-in、state ownership、Git ignore、H1 の evidence boundary は [docs/native-first-setup.md](docs/native-first-setup.md) を参照してください。
+
+- global example: [examples/global-CLAUDE.md](examples/global-CLAUDE.md)
+- project-local opt-in example: [examples/project-CLAUDE.local.md](examples/project-CLAUDE.local.md)
+- working-state schema: [.claude/context-guard/WORKING_STATE.template.md](.claude/context-guard/WORKING_STATE.template.md)
+
+native-first baseline では、`CLAUDE.local.md` と `WORKING_STATE.local.md` を checkout-local として Git から除外します。Context Guard を導入する場合のみ、supported runtime path の `.claude/context-guard/WORKING_STATE.md` に切り替えます。
+
+Auto Memory を無効化する環境変数は benchmark で persistence channel を分離するために使った control です。`--setting-sources project` も user/local settings を制御する isolation の一部でしたが、それだけで全 host surface の除去を保証したわけではありません。benchmark では Auto Memory の個別無効化と observed host surface の検証も併用しています。
+
+## Context Guard hooks を使う場合の5分セットアップ
 
 ### 1. Context Guard を配置
 
@@ -134,7 +159,9 @@ PYTHONPATH=/absolute/path/to/claude-code-context-guard/src python3 -m context_gu
 
 ## 日常運用
 
-基本は **semantic compaction** です。investigation完了、plan確定、root cause判明、major implementation完了、verification移行などの境界で、まず `WORKING_STATE.md` を更新してから `/compact` を実行します。auto-compaction は safety net として扱います。v0.1.2 は特定の token threshold に依存しません。
+基本は **semantic compaction** です。investigation完了、plan確定、root cause判明、major implementation完了、verification移行などの境界で、まず working state を更新してから `/compact` を実行します。auto-compaction は safety net として扱います。このプロジェクトは特定の numeric threshold を最適値として主張しません。
+
+Auto Memory と working state は同じ情報を重複保持させず、前者を durable な cross-session learning、後者を volatile な current-task handoff として分離するのが baseline です。
 
 Claude Code または Context Guard を更新した後は、[live smoke runbook](docs/live-smoke.md) を1回通してから日常利用へ戻します。
 
@@ -189,6 +216,6 @@ Context Guard は global settings を自動変更しません。
 
 ## 現在の位置づけ
 
-v0.1.2 は **live-validated operational baseline** です。実 lifecycle と安全性は確認済みですが、外部 memory が native compaction よりタスク成果を改善すること自体はまだ証明していません。次は [docs/benchmark-plan.md](docs/benchmark-plan.md) に従って native compaction、state-only、full guard を ablation し、改善が測定できた機能だけを追加します。
+v0.1.2 は **live-validated operational baseline** です。hook lifecycle と安全性は確認済みですが、H1 pilot は maintained state のみの場合に対する一貫した有用な rehydration increment を示しませんでした。そのため hook は default recommendation ではなく、automatic reinsertion や inspectable checkpoint が具体的に必要なproject向けの optional mechanism として扱います。
 
-FTS/BM25、embeddings、vector DB、knowledge graph、automatic LLM handoff はまだ default architecture に入れません。
+研究ロードマップは [docs/roadmap.md](docs/roadmap.md) のとおり closed です。FTS/BM25、embeddings、vector DB、knowledge graph、automatic LLM handoff を結果救済のために追加しません。
