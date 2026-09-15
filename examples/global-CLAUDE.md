@@ -1,6 +1,8 @@
 # Working-state policy
 
-For non-trivial tasks, maintain a concise project-local working state when the project opts into one.
+For non-trivial tasks, maintain a concise project-local working state when the project opts into one. Use the path declared by that project's local instructions; do not invent a global task-state file or silently default to a protected configuration path.
+
+Treat the working state as **current-task handoff state**. Keep volatile goal, acceptance criteria, current phase, unresolved failures, next action, and task-specific decisions there. Do not intentionally duplicate the same material into Auto Memory. Auto Memory is better reserved for durable cross-session learnings, conventions, and preferences that remain useful after the current task ends.
 
 Update the working state at semantic boundaries, not every turn:
 
